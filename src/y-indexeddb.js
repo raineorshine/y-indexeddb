@@ -128,18 +128,27 @@ export class IndexeddbPersistence extends Observable {
      */
     this.db = null
     this.synced = false
-    this._db = openDBWithVersion(dbname, db => {
-      if (db.objectStoreNames.contains(this.customStoreName)) {
-        return
-      }
 
-      idb.createStores(db, [
-        [this.customStoreName],
-        [this.updatesStoreName, { autoIncrement: true }]
-      ])
-    }, db => {
+    /**
+     * @param {IDBDatabase|null} db
+     */
+    const upgradeDbInstance = db => {
       this.db = db
-    }, false)
+    }
+
+    // first check if the object stores already exist
+    this._db = openDBWithVersion(dbname, noop, upgradeDbInstance, true).then(db => {
+      const exists = db.objectStoreNames.contains(this.customStoreName)
+
+      // if the object stores already exist, return the latest version of the db
+      // otherwise bump the version to create new object stores
+      return exists ? db : openDBWithVersion(dbname, db => {
+        idb.createStores(db, [
+          [this.customStoreName],
+          [this.updatesStoreName, { autoIncrement: true }]
+        ])
+      }, upgradeDbInstance, false)
+    })
     /**
      * @type {Promise<IndexeddbPersistence>}
      */
