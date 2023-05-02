@@ -2,8 +2,14 @@ import * as Y from 'yjs'
 import * as idb from 'lib0/indexeddb.js'
 import { Observable } from 'lib0/observable.js'
 
-const customStoreName = 'custom'
-const updatesStoreName = 'updates'
+const dbname = 'y-indexeddb'
+
+// db version must be incremented for each new doc in order to trigger onupgradeneeded and create new object stores
+// it is initiated from db.version of the first open connection
+/** @type {number | undefined} */
+let dbversion
+
+const noop = () => {}
 
 export const PREFERRED_TRIM_SIZE = 500
 
@@ -11,8 +17,8 @@ export const PREFERRED_TRIM_SIZE = 500
  * @param {IndexeddbPersistence} idbPersistence
  * @param {function(IDBObjectStore):void} [beforeApplyUpdatesCallback]
  */
-export const fetchUpdates = (idbPersistence, beforeApplyUpdatesCallback = () => {}) => {
-  const [updatesStore] = idb.transact(/** @type {IDBDatabase} */ (idbPersistence.db), [updatesStoreName]) // , 'readonly')
+export const fetchUpdates = (idbPersistence, beforeApplyUpdatesCallback = noop) => {
+  const [updatesStore] = idb.transact(/** @type {IDBDatabase} */ (idbPersistence.db), [idbPersistence.updatesStoreName]) // , 'readonly')
   return idb.getAll(updatesStore, idb.createIDBKeyRangeLowerBound(idbPersistence._dbref, false)).then(updates => {
     if (!idbPersistence._destroyed) {
       beforeApplyUpdatesCallback(updatesStore)
@@ -40,10 +46,65 @@ export const storeState = (idbPersistence, forceStore = true) =>
       }
     })
 
+export const clear = () => idb.deleteDB(dbname)
+
+/* istanbul ignore next */
 /**
  * @param {string} name
+ * @param {function(IDBDatabase):any} initDB Called when the database is first created
+ * @param {function(IDBDatabase):any} versionchange Called when the database version changes
+ * @param {boolean?} reopen Reopen the database without incrementing the version
+ * @return {Promise<IDBDatabase>}
  */
-export const clearDocument = name => idb.deleteDB(name)
+const openDBWithVersion = (name, initDB, versionchange, reopen) => new Promise((resolve, reject) => {
+  // increment the db version in order to add new object stores
+  // otherwise, just use the latest db version
+  const version = reopen || !dbversion ? dbversion : ++dbversion
+  // eslint-disable-next-line
+  const request = indexedDB.open(name, version)
+
+  /**
+   * @param {any} event
+   */
+  request.onupgradeneeded = event => {
+    initDB(event.target.result)
+  }
+
+  /* istanbul ignore next */
+  /**
+   * @param {any} event
+   */
+  request.onerror = event => {
+    reject(new Error(event.target.error))
+  }
+  /**
+   * @param {any} event
+   */
+  request.onsuccess = event => {
+    /**
+     * @type {IDBDatabase}
+     */
+    const db = event.target.result
+    if (!dbversion) {
+      dbversion = db.version
+    }
+    /* istanbul ignore next */
+    // close and re-open the database when the version changes, i.e. when new object stores are added for a new Doc
+    // transactions on the old db instance will fail
+    db.onversionchange = () => {
+      db.close()
+      openDBWithVersion(name, noop, versionchange, true).then(versionchange)
+    }
+    /* istanbul ignore if */
+    if (typeof addEventListener !== 'undefined') {
+      // eslint-disable-next-line
+      addEventListener('unload', () => {
+        db.close()
+      })
+    }
+    resolve(db)
+  }
+})
 
 /**
  * @extends Observable<string>
@@ -57,6 +118,8 @@ export class IndexeddbPersistence extends Observable {
     super()
     this.doc = doc
     this.name = name
+    this.customStoreName = `custom-${name}`
+    this.updatesStoreName = `updates-${name}`
     this._dbref = 0
     this._dbsize = 0
     this._destroyed = false
@@ -65,12 +128,18 @@ export class IndexeddbPersistence extends Observable {
      */
     this.db = null
     this.synced = false
-    this._db = idb.openDB(name, db =>
+    this._db = openDBWithVersion(dbname, db => {
+      if (db.objectStoreNames.contains(this.customStoreName)) {
+        return
+      }
+
       idb.createStores(db, [
-        ['updates', { autoIncrement: true }],
-        ['custom']
+        [this.customStoreName],
+        [this.updatesStoreName, { autoIncrement: true }]
       ])
-    )
+    }, db => {
+      this.db = db
+    }, false)
     /**
      * @type {Promise<IndexeddbPersistence>}
      */
@@ -101,7 +170,7 @@ export class IndexeddbPersistence extends Observable {
      */
     this._storeUpdate = (update, origin) => {
       if (this.db && origin !== this) {
-        const [updatesStore] = idb.transact(/** @type {IDBDatabase} */ (this.db), [updatesStoreName])
+        const [updatesStore] = idb.transact(/** @type {IDBDatabase} */ (this.db), [this.updatesStoreName])
         idb.addAutoKey(updatesStore, update)
         if (++this._dbsize >= PREFERRED_TRIM_SIZE) {
           // debounce store call
@@ -138,8 +207,21 @@ export class IndexeddbPersistence extends Observable {
    * @return {Promise<void>}
    */
   clearData () {
-    return this.destroy().then(() => {
-      idb.deleteDB(this.name)
+    return this._db.then(db => {
+      const [customStore, updatesStore] = idb.transact(db, [this.customStoreName, this.updatesStoreName], 'readwrite')
+      return Promise.all([
+        idb.rtop(customStore.clear()),
+        idb.rtop(updatesStore.clear())
+      ]).then(() => {
+        if (this._storeTimeoutId) {
+          clearTimeout(this._storeTimeoutId)
+        }
+        this.doc.off('update', this._storeUpdate)
+        this.doc.off('destroy', this.destroy)
+        this._destroyed = true
+
+        db.close()
+      })
     })
   }
 
@@ -149,7 +231,7 @@ export class IndexeddbPersistence extends Observable {
    */
   get (key) {
     return this._db.then(db => {
-      const [custom] = idb.transact(db, [customStoreName], 'readonly')
+      const [custom] = idb.transact(db, [this.customStoreName], 'readonly')
       return idb.get(custom, key)
     })
   }
@@ -161,7 +243,7 @@ export class IndexeddbPersistence extends Observable {
    */
   set (key, value) {
     return this._db.then(db => {
-      const [custom] = idb.transact(db, [customStoreName])
+      const [custom] = idb.transact(db, [this.customStoreName])
       return idb.put(custom, value, key)
     })
   }
@@ -172,7 +254,7 @@ export class IndexeddbPersistence extends Observable {
    */
   del (key) {
     return this._db.then(db => {
-      const [custom] = idb.transact(db, [customStoreName])
+      const [custom] = idb.transact(db, [this.customStoreName])
       return idb.del(custom, key)
     })
   }
