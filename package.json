@@ -62,7 +62,7 @@
     "standard": "^11.0.1",
     "typescript": "^3.9.7",
     "y-protocols": "^1.0.1",
-    "yjs": "^13.4.7"
+    "yjs": "^13.6.0"
   },
   "peerDependencies": {
     "yjs": "^13.0.0"
