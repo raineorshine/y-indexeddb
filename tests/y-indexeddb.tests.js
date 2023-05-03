@@ -9,6 +9,7 @@ import * as promise from 'lib0/promise.js'
  */
 export const testIdbUpdateAndMerge = async tc => {
   await clear()
+
   const doc1 = new Y.Doc()
   const arr1 = doc1.getArray('t')
   const doc2 = new Y.Doc()
@@ -38,13 +39,14 @@ export const testIdbUpdateAndMerge = async tc => {
   await fetchUpdates(persistence2)
   t.assert(arr2.length === PREFERRED_TRIM_SIZE + 1)
   t.assert(persistence1._dbsize === 1) // wait for dbsize === 0. db should be concatenated
+
+  await clear()
 }
 
 /**
  * @param {t.TestCase} tc
  */
 export const testIdbConcurrentMerge = async tc => {
-  await clear()
   const doc1 = new Y.Doc()
   const arr1 = doc1.getArray('t')
   const doc2 = new Y.Doc()
@@ -72,13 +74,14 @@ export const testIdbConcurrentMerge = async tc => {
   t.assert(persistence1._dbsize < 10)
   t.assert(persistence2._dbsize < 10)
   t.compareArrays(arr1.toArray(), arr2.toArray())
+
+  await clear()
 }
 
 /**
  * @param {t.TestCase} tc
  */
 export const testMetaStorage = async tc => {
-  await clear()
   const ydoc = new Y.Doc()
   const persistence = new IndexeddbPersistence(tc.testName, ydoc)
   persistence.set('a', 4)
@@ -91,13 +94,14 @@ export const testMetaStorage = async tc => {
   t.assert(resB === 'meta!')
   const resC = await persistence.get('obj')
   t.compareObjects(resC, { a: 4 })
+
+  await clear()
 }
 
 /**
  * @param {t.TestCase} tc
  */
 export const testEarlyDestroy = async tc => {
-  await clear()
   let hasbeenSyced = false
   const ydoc = new Y.Doc()
   const indexDBProvider = new IndexeddbPersistence(tc.testName, ydoc)
@@ -107,14 +111,14 @@ export const testEarlyDestroy = async tc => {
   indexDBProvider.destroy()
   await new Promise((resolve) => setTimeout(resolve, 500))
   t.assert(!hasbeenSyced)
+
+  await clear()
 }
 
 /**
  * @param {t.TestCase} tc
  */
 export const testMultipleDocs = async tc => {
-  await clear()
-
   const persistenceArray = await Promise.all(Array(10).fill(null).map((value, i) => {
     const doc = new Y.Doc()
     const arr = doc.getArray('t')
@@ -130,14 +134,14 @@ export const testMultipleDocs = async tc => {
     const arr = persistence.doc.getArray('t')
     t.compareArrays(arr.toJSON(), [i])
   }
+
+  await clear()
 }
 
 /**
  * @param {t.TestCase} tc
  */
 export const testClearData = async tc => {
-  await clear()
-
   // this document will be cleared
   const doc1 = new Y.Doc()
   const persistence1 = new IndexeddbPersistence(tc.testName, doc1)
@@ -153,6 +157,10 @@ export const testClearData = async tc => {
   // clear persistence1
   await persistence1.clearData()
 
+  // persistence1 object stores should be deleted
+  t.assert(persistence1.db)
+  t.assert(persistence1.db.objectStoreNames.length === 2)
+
   // persistence1 should not exist and throw an error on get
   let error
   try {
@@ -165,4 +173,6 @@ export const testClearData = async tc => {
   // persistence2 should be preserved
   const resB = await persistence2.get('b')
   t.assert(resB === 5)
+
+  await clear()
 }

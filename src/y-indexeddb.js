@@ -153,9 +153,8 @@ export class IndexeddbPersistence extends Observable {
       })
 
     this._db = objectStoreNamesInitialized.then(() => {
-
-    // first check if the object stores already exist
-      const exists = objectStoreNames.contains(this.customStoreName)
+      // first check if the object stores already exist
+      const exists = !!objectStoreNames && objectStoreNames.contains(this.customStoreName)
 
       // if the object stores already exist, return the latest version of the db
       // otherwise bump the version to create new object stores
@@ -236,20 +235,20 @@ export class IndexeddbPersistence extends Observable {
    */
   clearData () {
     return this._db.then(db => {
-      const [customStore, updatesStore] = idb.transact(db, [this.customStoreName, this.updatesStoreName], 'readwrite')
-      return Promise.all([
-        idb.rtop(customStore.clear()),
-        idb.rtop(updatesStore.clear())
-      ]).then(() => {
-        if (this._storeTimeoutId) {
-          clearTimeout(this._storeTimeoutId)
-        }
-        this.doc.off('update', this._storeUpdate)
-        this.doc.off('destroy', this.destroy)
-        this._destroyed = true
-
-        db.close()
-      })
+      db.close()
+      openDBWithVersion(dbname, db => {
+        db.deleteObjectStore(this.customStoreName)
+        db.deleteObjectStore(this.updatesStoreName)
+      }, noop, false)
+        .then(db => {
+          if (this._storeTimeoutId) {
+            clearTimeout(this._storeTimeoutId)
+          }
+          this.doc.off('update', this._storeUpdate)
+          this.doc.off('destroy', this.destroy)
+          this._destroyed = true
+          this.db = db
+        })
     })
   }
 
