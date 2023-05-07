@@ -1,6 +1,6 @@
 
 import * as Y from 'yjs'
-import { IndexeddbPersistence, PREFERRED_TRIM_SIZE, clear, fetchUpdates } from '../src/y-indexeddb.js'
+import { IndexeddbPersistence, PREFERRED_TRIM_SIZE, clear, clearDocument, fetchUpdates } from '../src/y-indexeddb.js'
 import * as idb from 'lib0/indexeddb.js'
 import * as t from 'lib0/testing.js'
 import * as promise from 'lib0/promise.js'
@@ -157,6 +157,46 @@ export const testClearData = async tc => {
 
   // clear persistence1
   await persistence1.clearData()
+
+  // persistence1 object stores should be deleted
+  const db = await idb.openDB('y-indexeddb', () => {})
+  t.assert(db)
+  t.assert(db.objectStoreNames.length === 2)
+
+  // persistence1 should not exist and throw an error on get
+  let error
+  try {
+    await persistence1.get('a')
+  } catch (/** @type {any} */e) {
+    error = e.message
+  }
+  t.assert(error)
+
+  // persistence2 should be preserved
+  const resB = await persistence2.get('b')
+  t.assert(resB === 5)
+
+  await clear()
+}
+
+/**
+ * @param {t.TestCase} tc
+ */
+export const testClearDocument = async tc => {
+  // this document will be cleared
+  const doc1 = new Y.Doc()
+  const persistence1 = new IndexeddbPersistence(tc.testName, doc1)
+  persistence1.set('a', 4)
+
+  // this document should be preserved
+  const doc2 = new Y.Doc()
+  const arr2 = doc2.getArray('t')
+  arr2.insert(0, [1])
+  const persistence2 = new IndexeddbPersistence('doc2', doc2)
+  persistence2.set('b', 5)
+
+  // clear persistence1
+  await clearDocument(tc.testName)
 
   // persistence1 object stores should be deleted
   const db = await idb.openDB('y-indexeddb', () => {})

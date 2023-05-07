@@ -54,10 +54,27 @@ export const storeState = (idbPersistence, forceStore = true) =>
       }
     })
 
+/** Deletes the entire database. */
 export const clear = () => idb.deleteDB(dbname).then(() => {
   dbversion = undefined
   objectStoreNames = undefined
 })
+
+/** Deletes a document from the database. We need a standalone method as a way to delete a persisted Doc if there is no IndexedDBPersistence instance. If you have an IndexedDBPersistence instance, call the clearData instance methnod.
+ * @param {string} name
+ * */
+export const clearDocument = (name) => {
+  const customStoreName = `custom-${name}`
+  const updatesStoreName = `updates-${name}`
+  dbpromise = dbpromise.then(db => {
+    db.close()
+    return openDBWithVersion(dbname, db => {
+      db.deleteObjectStore(customStoreName)
+      db.deleteObjectStore(updatesStoreName)
+    }, noop, false)
+  })
+  return dbpromise
+}
 
 /* istanbul ignore next */
 /**
