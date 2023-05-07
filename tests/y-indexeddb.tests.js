@@ -1,6 +1,7 @@
 
 import * as Y from 'yjs'
 import { IndexeddbPersistence, PREFERRED_TRIM_SIZE, clear, fetchUpdates } from '../src/y-indexeddb.js'
+import * as idb from 'lib0/indexeddb.js'
 import * as t from 'lib0/testing.js'
 import * as promise from 'lib0/promise.js'
 
@@ -158,8 +159,9 @@ export const testClearData = async tc => {
   await persistence1.clearData()
 
   // persistence1 object stores should be deleted
-  t.assert(persistence1.db)
-  t.assert(persistence1.db.objectStoreNames.length === 2)
+  const db = await idb.openDB('y-indexeddb', () => {})
+  t.assert(db)
+  t.assert(db.objectStoreNames.length === 2)
 
   // persistence1 should not exist and throw an error on get
   let error

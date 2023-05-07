@@ -9,6 +9,10 @@ const dbname = 'y-indexeddb'
 /** @type {number | undefined} */
 let dbversion
 
+// A promiseed IDBDatabase connection. The promise object reference will change whenever a new IndexedDBPersistence is instantiated, as it needs to open a new connection to add new object stores. */
+/** @type {Promise<IDBDatabase>} */
+let dbpromise
+
 // cache objectStoreNames to avoid additional db connection for each new Doc
 /** @type {Promise<DOMStringList> | undefined} */
 let objectStoreNames
@@ -145,6 +149,9 @@ export class IndexeddbPersistence extends Observable {
      */
     const upgradeDbInstance = db => {
       this.db = db
+      if (db) {
+        dbpromise = Promise.resolve(db)
+      }
     }
 
     // get initial objectStoreNames if it is not defined
@@ -155,7 +162,7 @@ export class IndexeddbPersistence extends Observable {
         return objectStoreNames
       })
 
-    this._db = objectStoreNames.then((_objectStoreNames) => {
+    dbpromise = objectStoreNames.then((_objectStoreNames) => {
       // first check if the object stores already exist
       const exists = !!_objectStoreNames && _objectStoreNames.contains(this.customStoreName)
 
@@ -173,7 +180,7 @@ export class IndexeddbPersistence extends Observable {
     /**
      * @type {Promise<IndexeddbPersistence>}
      */
-    this.whenSynced = this._db.then(db => {
+    this.whenSynced = dbpromise.then(db => {
       this.db = db
       /**
        * @param {IDBObjectStore} updatesStore
@@ -226,18 +233,16 @@ export class IndexeddbPersistence extends Observable {
     this.doc.off('update', this._storeUpdate)
     this.doc.off('destroy', this.destroy)
     this._destroyed = true
-    return this._db.then(db => {
-      db.close()
-    })
+    return dbpromise
   }
 
   /**
-   * Destroys this instance and removes all data from indexeddb.
+   * Destroys this instance and removes the object stores from indexeddb.
    *
    * @return {Promise<void>}
    */
   clearData () {
-    return this._db.then(db => {
+    return dbpromise.then(db => {
       db.close()
       openDBWithVersion(dbname, db => {
         db.deleteObjectStore(this.customStoreName)
@@ -251,6 +256,7 @@ export class IndexeddbPersistence extends Observable {
           this.doc.off('destroy', this.destroy)
           this._destroyed = true
           this.db = db
+          dbpromise = Promise.resolve(db)
         })
     })
   }
@@ -260,7 +266,7 @@ export class IndexeddbPersistence extends Observable {
    * @return {Promise<String | number | ArrayBuffer | Date | any>}
    */
   get (key) {
-    return this._db.then(db => {
+    return dbpromise.then(db => {
       const [custom] = idb.transact(db, [this.customStoreName], 'readonly')
       return idb.get(custom, key)
     })
@@ -272,7 +278,7 @@ export class IndexeddbPersistence extends Observable {
    * @return {Promise<String | number | ArrayBuffer | Date>}
    */
   set (key, value) {
-    return this._db.then(db => {
+    return dbpromise.then(db => {
       const [custom] = idb.transact(db, [this.customStoreName])
       return idb.put(custom, value, key)
     })
@@ -283,7 +289,7 @@ export class IndexeddbPersistence extends Observable {
    * @return {Promise<undefined>}
    */
   del (key) {
-    return this._db.then(db => {
+    return dbpromise.then(db => {
       const [custom] = idb.transact(db, [this.customStoreName])
       return idb.del(custom, key)
     })
