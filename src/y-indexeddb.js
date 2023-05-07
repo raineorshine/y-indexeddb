@@ -144,16 +144,6 @@ export class IndexeddbPersistence extends Observable {
     this.db = null
     this.synced = false
 
-    /**
-     * @param {IDBDatabase|null} db
-     */
-    const upgradeDbInstance = db => {
-      this.db = db
-      if (db) {
-        dbpromise = Promise.resolve(db)
-      }
-    }
-
     // get initial objectStoreNames if it is not defined
     objectStoreNames = objectStoreNames ||
       openDBWithVersion(dbname, noop, noop, true).then(db => {
@@ -174,7 +164,7 @@ export class IndexeddbPersistence extends Observable {
           [this.updatesStoreName, { autoIncrement: true }]
         ])
         objectStoreNames = Promise.resolve(db.objectStoreNames)
-      }, upgradeDbInstance, exists)
+      }, this.upgradeDbInstance.bind(this), exists)
     })
 
     /**
@@ -255,10 +245,17 @@ export class IndexeddbPersistence extends Observable {
           this.doc.off('update', this._storeUpdate)
           this.doc.off('destroy', this.destroy)
           this._destroyed = true
-          this.db = db
-          dbpromise = Promise.resolve(db)
+          this.upgradeDbInstance(db)
         })
     })
+  }
+
+  /**
+   * @param {IDBDatabase} db
+   */
+  upgradeDbInstance (db) {
+    this.db = db
+    dbpromise = Promise.resolve(db)
   }
 
   /**
