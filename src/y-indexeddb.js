@@ -10,7 +10,7 @@ const dbname = 'y-indexeddb'
 let dbversion
 
 // cache objectStoreNames to avoid additional db connection for each new Doc
-/** @type {DOMStringList | undefined} */
+/** @type {Promise<DOMStringList> | undefined} */
 let objectStoreNames
 
 const noop = () => {}
@@ -148,17 +148,16 @@ export class IndexeddbPersistence extends Observable {
     }
 
     // get initial objectStoreNames if it is not defined
-    const objectStoreNamesInitialized = objectStoreNames
-      ? Promise.resolve(objectStoreNames)
-      : openDBWithVersion(dbname, noop, noop, true).then(db => {
-        objectStoreNames = db.objectStoreNames
+    objectStoreNames = objectStoreNames ||
+      openDBWithVersion(dbname, noop, noop, true).then(db => {
+        const objectStoreNames = db.objectStoreNames
         db.close()
         return objectStoreNames
       })
 
-    this._db = objectStoreNamesInitialized.then(() => {
+    this._db = objectStoreNames.then((_objectStoreNames) => {
       // first check if the object stores already exist
-      const exists = !!objectStoreNames && objectStoreNames.contains(this.customStoreName)
+      const exists = !!_objectStoreNames && _objectStoreNames.contains(this.customStoreName)
 
       // if the object stores already exist, return the latest version of the db
       // otherwise bump the version to create new object stores
@@ -167,7 +166,7 @@ export class IndexeddbPersistence extends Observable {
           [this.customStoreName],
           [this.updatesStoreName, { autoIncrement: true }]
         ])
-        objectStoreNames = db.objectStoreNames
+        objectStoreNames = Promise.resolve(db.objectStoreNames)
       }, upgradeDbInstance, exists)
     })
 
