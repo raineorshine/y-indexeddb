@@ -92,6 +92,7 @@ const openDBWithVersion = (name, initDB, versionchange, reopen) => new Promise((
      * @type {IDBDatabase}
      */
     const db = event.target.result
+    const close = () => db.close()
     if (!dbversion) {
       dbversion = db.version
     }
@@ -101,13 +102,16 @@ const openDBWithVersion = (name, initDB, versionchange, reopen) => new Promise((
     db.onversionchange = () => {
       db.close()
       openDBWithVersion(name, noop, versionchange, true).then(versionchange)
+      /* istanbul ignore if */
+      if (typeof removeEventListener !== 'undefined') {
+        // eslint-disable-next-line
+        removeEventListener('unload', close)
+      }
     }
     /* istanbul ignore if */
     if (typeof addEventListener !== 'undefined') {
       // eslint-disable-next-line
-      addEventListener('unload', () => {
-        db.close()
-      })
+      addEventListener('unload', close)
     }
     resolve(db)
   }
