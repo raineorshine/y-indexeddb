@@ -10,12 +10,8 @@ const dbname = 'y-indexeddb'
 let dbversion
 
 // A promiseed IDBDatabase connection. The promise object reference will change whenever a new IndexedDBPersistence is instantiated, as it needs to open a new connection to add new object stores. */
-/** @type {Promise<IDBDatabase>} */
+/** @type {Promise<IDBDatabase> | undefined} */
 let dbpromise
-
-// cache objectStoreNames to avoid additional db connection for each new Doc
-/** @type {Promise<DOMStringList> | undefined} */
-let objectStoreNames
 
 const noop = () => {}
 
@@ -56,8 +52,8 @@ export const storeState = (idbPersistence, forceStore = true) =>
 
 /** Deletes the entire database. */
 export const clear = () => idb.deleteDB(dbname).then(() => {
+  dbpromise = undefined
   dbversion = undefined
-  objectStoreNames = undefined
 })
 
 /** Deletes a document from the database. We need a standalone method as a way to delete a persisted Doc if there is no IndexedDBPersistence instance. If you have an IndexedDBPersistence instance, call the clearData instance methnod.
@@ -66,14 +62,19 @@ export const clear = () => idb.deleteDB(dbname).then(() => {
 export const clearDocument = (name) => {
   const customStoreName = `custom-${name}`
   const updatesStoreName = `updates-${name}`
-  dbpromise = dbpromise.then(db => {
-    db.close()
-    dbpromise = openDBWithVersion(dbname, db => {
+  /**
+   * @type {Promise<IDBDatabase | null>}
+   */
+  const dbmaybe = dbpromise || Promise.resolve(null)
+
+  dbpromise = dbmaybe.then(db => {
+    if (db) {
+      db.close()
+    }
+    return openDBWithVersion(dbname, db => {
       db.deleteObjectStore(customStoreName)
       db.deleteObjectStore(updatesStoreName)
     }, noop, false)
-    objectStoreNames = dbpromise.then(db => db.objectStoreNames)
-    return dbpromise
   })
 
   return dbpromise
@@ -165,16 +166,16 @@ export class IndexeddbPersistence extends Observable {
     this.synced = false
 
     // get initial objectStoreNames if it is not defined
-    objectStoreNames = objectStoreNames ||
-      openDBWithVersion(dbname, noop, noop, true).then(db => {
+    const objectStoreNames = dbpromise ? dbpromise.then(db => db.objectStoreNames)
+      : openDBWithVersion(dbname, noop, noop, true).then(db => {
         const objectStoreNames = db.objectStoreNames
         db.close()
         return objectStoreNames
       })
 
-    dbpromise = objectStoreNames.then((_objectStoreNames) => {
+    dbpromise = objectStoreNames.then(names => {
       // first check if the object stores already exist
-      const exists = !!_objectStoreNames && _objectStoreNames.contains(this.customStoreName)
+      const exists = !!names && names.contains(this.customStoreName)
 
       // if the object stores already exist, return the latest version of the db
       // otherwise bump the version to create new object stores
@@ -185,8 +186,6 @@ export class IndexeddbPersistence extends Observable {
         ])
       }, this.upgradeDbInstance.bind(this), exists)
     })
-
-    objectStoreNames = dbpromise.then(db => db.objectStoreNames)
 
     /**
      * @type {Promise<IndexeddbPersistence>}
@@ -248,11 +247,22 @@ export class IndexeddbPersistence extends Observable {
   }
 
   /**
+   * @param {IDBDatabase} db
+   */
+  upgradeDbInstance (db) {
+    this.db = db
+    dbpromise = Promise.resolve(db)
+  }
+
+  /**
    * Destroys this instance and removes the object stores from indexeddb.
    *
    * @return {Promise<void>}
    */
   clearData () {
+    if (!dbpromise) {
+      throw new Error(`clearData() of IndexeddbPersistence instance "${this.name}" cannot be called after clear.`)
+    }
     return dbpromise.then(db => {
       db.close()
       openDBWithVersion(dbname, db => {
@@ -272,18 +282,13 @@ export class IndexeddbPersistence extends Observable {
   }
 
   /**
-   * @param {IDBDatabase} db
-   */
-  upgradeDbInstance (db) {
-    this.db = db
-    dbpromise = Promise.resolve(db)
-  }
-
-  /**
    * @param {String | number | ArrayBuffer | Date} key
    * @return {Promise<String | number | ArrayBuffer | Date | any>}
    */
   get (key) {
+    if (!dbpromise) {
+      throw new Error(`get() of IndexeddbPersistence instance "${this.name}" cannot be called after clear.`)
+    }
     return dbpromise.then(db => {
       const [custom] = idb.transact(db, [this.customStoreName], 'readonly')
       return idb.get(custom, key)
@@ -296,6 +301,9 @@ export class IndexeddbPersistence extends Observable {
    * @return {Promise<String | number | ArrayBuffer | Date>}
    */
   set (key, value) {
+    if (!dbpromise) {
+      throw new Error(`set() of IndexeddbPersistence instance "${this.name}" cannot be called after clear.`)
+    }
     return dbpromise.then(db => {
       const [custom] = idb.transact(db, [this.customStoreName])
       return idb.put(custom, value, key)
@@ -307,6 +315,9 @@ export class IndexeddbPersistence extends Observable {
    * @return {Promise<undefined>}
    */
   del (key) {
+    if (!dbpromise) {
+      throw new Error(`del() of IndexeddbPersistence instance "${this.name}" cannot be called after clear.`)
+    }
     return dbpromise.then(db => {
       const [custom] = idb.transact(db, [this.customStoreName])
       return idb.del(custom, key)
