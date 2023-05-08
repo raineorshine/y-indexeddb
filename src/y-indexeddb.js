@@ -65,9 +65,9 @@ export const clearDocument = (name) => {
   /**
    * @type {Promise<IDBDatabase | null>}
    */
-  const dbmaybe = dbpromise || Promise.resolve(null)
+  const dbOrNull = dbpromise || Promise.resolve(null)
 
-  dbpromise = dbmaybe.then(db => {
+  const dbNew = dbOrNull.then(db => {
     if (db) {
       db.close()
     }
@@ -77,7 +77,16 @@ export const clearDocument = (name) => {
     }, noop, false)
   })
 
-  return dbpromise
+  // Set dbpromise to the new db instance if deleteObjectStore succeeds, otherwise revert.
+  // Assign the new promise immediately to dbpromise to block other db requests until this resolves.
+  // Do not assign dbNew directly to the global dbpromise, as a rejected promise will fail subsequent calls.
+  /**
+   * @type {any}
+   */
+  const dbrevert = dbpromise
+  dbpromise = dbNew.catch(() => dbrevert)
+
+  return dbNew
 }
 
 /* istanbul ignore next */
@@ -221,7 +230,7 @@ export class IndexeddbPersistence extends Observable {
      */
     this._storeUpdate = (update, origin) => {
       if (this.db && origin !== this) {
-        const [updatesStore] = idb.transact(/** @type {IDBDatabase} */ (this.db), [this.updatesStoreName])
+        const [updatesStore] = idb.transact(/** @type {IDBDatabase} */ this.db, [this.updatesStoreName])
         idb.addAutoKey(updatesStore, update)
         if (++this._dbsize >= PREFERRED_TRIM_SIZE) {
           // debounce store call
@@ -261,28 +270,33 @@ export class IndexeddbPersistence extends Observable {
   /**
    * Destroys this instance and removes the object stores from indexeddb.
    *
-   * @return {Promise<void>}
+   * @return {Promise<IDBDatabase>}
    */
   clearData () {
     if (!dbpromise) {
       throw new Error(`clearData() of IndexeddbPersistence instance "${this.name}" cannot be called after clear.`)
     }
-    return dbpromise.then(db => {
+
+    this.destroy()
+
+    const dbNew = dbpromise.then(db => {
       db.close()
-      openDBWithVersion(dbname, db => {
+      return openDBWithVersion(dbname, db => {
         db.deleteObjectStore(this.customStoreName)
         db.deleteObjectStore(this.updatesStoreName)
-      }, noop, false)
-        .then(db => {
-          if (this._storeTimeoutId) {
-            clearTimeout(this._storeTimeoutId)
-          }
-          this.doc.off('update', this._storeUpdate)
-          this.doc.off('destroy', this.destroy)
-          this._destroyed = true
-          this.upgradeDbInstance(db)
-        })
+      }, this.upgradeDbInstance.bind(this), false)
     })
+
+    // Set dbpromise to the new db instance if deleteObjectStore succeeds, otherwise revert.
+    // Assign the new promise immediately to dbpromise to block other db requests until this resolves.
+    // Do not assign dbNew directly to the global dbpromise, as a rejected promise will fail subsequent calls.
+    /**
+     * @type {any}
+     */
+    const dbrevert = dbpromise
+    dbpromise = dbNew.catch(() => dbrevert)
+
+    return dbNew
   }
 
   /**
