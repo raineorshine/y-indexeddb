@@ -68,11 +68,14 @@ export const clearDocument = (name) => {
   const updatesStoreName = `updates-${name}`
   dbpromise = dbpromise.then(db => {
     db.close()
-    return openDBWithVersion(dbname, db => {
+    dbpromise = openDBWithVersion(dbname, db => {
       db.deleteObjectStore(customStoreName)
       db.deleteObjectStore(updatesStoreName)
     }, noop, false)
+    objectStoreNames = dbpromise.then(db => db.objectStoreNames)
+    return dbpromise
   })
+
   return dbpromise
 }
 
@@ -180,9 +183,10 @@ export class IndexeddbPersistence extends Observable {
           [this.customStoreName],
           [this.updatesStoreName, { autoIncrement: true }]
         ])
-        objectStoreNames = Promise.resolve(db.objectStoreNames)
       }, this.upgradeDbInstance.bind(this), exists)
     })
+
+    objectStoreNames = dbpromise.then(db => db.objectStoreNames)
 
     /**
      * @type {Promise<IndexeddbPersistence>}

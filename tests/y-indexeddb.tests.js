@@ -218,3 +218,30 @@ export const testClearDocument = async tc => {
 
   await clear()
 }
+
+/**
+ * @param {t.TestCase} tc
+ */
+export const testClearDocumentAndReopen = async tc => {
+  // this document will be cleared
+  const doc1 = new Y.Doc()
+  const persistence1 = new IndexeddbPersistence(tc.testName, doc1)
+  await persistence1.set('a', 4)
+
+  // clear persistence1
+  await clearDocument(tc.testName)
+
+  const doc2 = new Y.Doc()
+  const persistence2 = new IndexeddbPersistence(tc.testName, doc2)
+  await persistence2.set('a', 5)
+
+  // persistence1 object stores should be deleted
+  const db = await idb.openDB('y-indexeddb', () => {})
+  t.assert(db)
+  t.assert(db.objectStoreNames.length === 2)
+
+  const resA = await persistence2.get('a')
+  t.assert(resA === 5)
+
+  await clear()
+}
