@@ -99,7 +99,11 @@ const openDBWithVersion = (name, initDB, versionchange, reopen) => new Promise((
    * @param {any} event
    */
   request.onupgradeneeded = event => {
-    initDB(event.target.result)
+    try {
+      initDB(event.target.result)
+    } catch (e) {
+      reject(e)
+    }
   }
 
   /* istanbul ignore next */
