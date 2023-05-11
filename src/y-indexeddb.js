@@ -4,14 +4,18 @@ import { Observable } from 'lib0/observable.js'
 
 const dbname = 'y-indexeddb'
 
-// db version must be incremented for each new doc in order to trigger onupgradeneeded and create new object stores
-// it is initiated from db.version of the first open connection
+// The db version must be incremented for each new doc in order to trigger onupgradeneeded and create new object stores.
+// It is initiated from db.version of the first open connection, then incremented at pace with db upgrades.
 /** @type {number | undefined} */
 let dbversion
 
 // A promiseed IDBDatabase connection. The promise object reference will change whenever a new IndexedDBPersistence is instantiated, as it needs to open a new connection to add new object stores. */
 /** @type {Promise<IDBDatabase> | undefined} */
 let dbpromise
+
+// A cached IDBDatabase instance from the last resolved dbpromise.
+/** @type {IDBDatabase | undefined} */
+let dbcached
 
 const noop = () => {}
 
@@ -22,7 +26,7 @@ export const PREFERRED_TRIM_SIZE = 500
  * @param {function(IDBObjectStore):void} [beforeApplyUpdatesCallback]
  */
 export const fetchUpdates = (idbPersistence, beforeApplyUpdatesCallback = noop) => {
-  const [updatesStore] = idb.transact(/** @type {IDBDatabase} */ (idbPersistence.db), [idbPersistence.updatesStoreName]) // , 'readonly')
+  const [updatesStore] = idb.transact(/** @type {IDBDatabase} */ (dbcached), [idbPersistence.updatesStoreName]) // , 'readonly')
   return idb.getAll(updatesStore, idb.createIDBKeyRangeLowerBound(idbPersistence._dbref, false)).then(updates => {
     if (!idbPersistence._destroyed) {
       beforeApplyUpdatesCallback(updatesStore)
@@ -53,6 +57,7 @@ export const storeState = (idbPersistence, forceStore = true) =>
 /** Deletes the entire database. */
 export const clear = () => idb.deleteDB(dbname).then(() => {
   dbpromise = undefined
+  dbcached = undefined
   dbversion = undefined
 })
 
@@ -67,37 +72,39 @@ export const clearDocument = (name) => {
    */
   const dbOrNull = dbpromise || Promise.resolve(null)
 
-  const dbNew = dbOrNull.then(db => {
+  const dbnew = dbOrNull.then(db => {
     if (db) {
       db.close()
     }
     return openDBWithVersion(dbname, db => {
       db.deleteObjectStore(customStoreName)
       db.deleteObjectStore(updatesStoreName)
-    }, noop, false)
+    }, false)
   })
 
   // Set dbpromise to the new db instance if deleteObjectStore succeeds, otherwise revert.
   // Assign the new promise immediately to dbpromise to block other db requests until this resolves.
-  // Do not assign dbNew directly to the global dbpromise, as a rejected promise will fail subsequent calls.
+  // Do not assign dbnew directly to the global dbpromise, as a rejected promise will fail subsequent calls.
   /**
    * @type {any}
    */
   const dbrevert = dbpromise
-  dbpromise = dbNew.catch(() => dbrevert)
+  dbpromise = dbnew.catch(() => dbrevert).then(db => {
+    dbcached = db
+    return db
+  })
 
-  return dbNew
+  return dbnew
 }
 
 /* istanbul ignore next */
 /**
  * @param {string} name
  * @param {function(IDBDatabase):any} initDB Called when the database is first created
- * @param {function(IDBDatabase):any} versionchange Called when the database version changes
  * @param {boolean?} reopen Reopen the database without incrementing the version
  * @return {Promise<IDBDatabase>}
  */
-const openDBWithVersion = (name, initDB, versionchange, reopen) => new Promise((resolve, reject) => {
+const openDBWithVersion = (name, initDB, reopen) => new Promise((resolve, reject) => {
   // increment the db version in order to add new object stores
   // otherwise, just use the latest db version
   const version = reopen || !dbversion ? dbversion : ++dbversion
@@ -130,27 +137,21 @@ const openDBWithVersion = (name, initDB, versionchange, reopen) => new Promise((
      * @type {IDBDatabase}
      */
     const db = event.target.result
-    const close = () => db.close()
+    dbcached = db
+
     if (!dbversion) {
       dbversion = db.version
     }
+
     /* istanbul ignore next */
-    // close and re-open the database when the version changes, i.e. when new object stores are added for a new Doc
-    // transactions on the old db instance will fail
-    db.onversionchange = () => {
-      db.close()
-      openDBWithVersion(name, noop, versionchange, true).then(versionchange)
-      /* istanbul ignore if */
-      if (typeof removeEventListener !== 'undefined') {
-        // eslint-disable-next-line
-        removeEventListener('unload', close)
-      }
-    }
+    db.onversionchange = () => db.close()
+
     /* istanbul ignore if */
     if (typeof addEventListener !== 'undefined') {
       // eslint-disable-next-line
       addEventListener('unload', close)
     }
+
     resolve(db)
   }
 })
@@ -172,15 +173,12 @@ export class IndexeddbPersistence extends Observable {
     this._dbref = 0
     this._dbsize = 0
     this._destroyed = false
-    /**
-     * @type {IDBDatabase|null}
-     */
-    this.db = null
+    this.open = false
     this.synced = false
 
     // get initial objectStoreNames if it is not defined
     const objectStoreNames = dbpromise ? dbpromise.then(db => db.objectStoreNames)
-      : openDBWithVersion(dbname, noop, noop, true).then(db => {
+      : openDBWithVersion(dbname, noop, true).then(db => {
         const objectStoreNames = db.objectStoreNames
         db.close()
         return objectStoreNames
@@ -197,14 +195,14 @@ export class IndexeddbPersistence extends Observable {
           [this.customStoreName],
           [this.updatesStoreName, { autoIncrement: true }]
         ])
-      }, this.upgradeDbInstance.bind(this), exists)
+      }, exists)
     })
 
     /**
      * @type {Promise<IndexeddbPersistence>}
      */
     this.whenSynced = dbpromise.then(db => {
-      this.db = db
+      this.open = true
       /**
        * @param {IDBObjectStore} updatesStore
        */
@@ -229,8 +227,8 @@ export class IndexeddbPersistence extends Observable {
      * @param {any} origin
      */
     this._storeUpdate = (update, origin) => {
-      if (this.db && origin !== this && this.db.version === dbversion) {
-        const [updatesStore] = idb.transact(/** @type {IDBDatabase} */ this.db, [this.updatesStoreName])
+      if (this.open && origin !== this && dbcached) {
+        const [updatesStore] = idb.transact(/** @type {IDBDatabase} */ dbcached, [this.updatesStoreName])
         idb.addAutoKey(updatesStore, update)
         if (++this._dbsize >= PREFERRED_TRIM_SIZE) {
           // debounce store call
@@ -260,14 +258,6 @@ export class IndexeddbPersistence extends Observable {
   }
 
   /**
-   * @param {IDBDatabase} db
-   */
-  upgradeDbInstance (db) {
-    this.db = db
-    dbpromise = Promise.resolve(db)
-  }
-
-  /**
    * Destroys this instance and removes the object stores from indexeddb.
    *
    * @return {Promise<IDBDatabase>}
@@ -279,24 +269,27 @@ export class IndexeddbPersistence extends Observable {
 
     this.destroy()
 
-    const dbNew = dbpromise.then(db => {
+    const dbnew = dbpromise.then(db => {
       db.close()
       return openDBWithVersion(dbname, db => {
         db.deleteObjectStore(this.customStoreName)
         db.deleteObjectStore(this.updatesStoreName)
-      }, this.upgradeDbInstance.bind(this), false)
+      }, false)
     })
 
     // Set dbpromise to the new db instance if deleteObjectStore succeeds, otherwise revert.
     // Assign the new promise immediately to dbpromise to block other db requests until this resolves.
-    // Do not assign dbNew directly to the global dbpromise, as a rejected promise will fail subsequent calls.
+    // Do not assign the new db directly to the global dbpromise, as a rejected promise will fail subsequent calls.
     /**
      * @type {any}
      */
     const dbrevert = dbpromise
-    dbpromise = dbNew.catch(() => dbrevert)
+    dbpromise = dbnew.catch(() => dbrevert).then(db => {
+      dbcached = db
+      return db
+    })
 
-    return dbNew
+    return dbnew
   }
 
   /**
