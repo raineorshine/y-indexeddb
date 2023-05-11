@@ -173,7 +173,7 @@ export class IndexeddbPersistence extends Observable {
     this._dbref = 0
     this._dbsize = 0
     this._destroyed = false
-    this.open = false
+    this.created = false
     this.synced = false
 
     // get initial objectStoreNames if it is not defined
@@ -195,14 +195,16 @@ export class IndexeddbPersistence extends Observable {
           [this.customStoreName],
           [this.updatesStoreName, { autoIncrement: true }]
         ])
-      }, exists)
+      }, exists).then(db => {
+        this.created = true
+        return db
+      })
     })
 
     /**
      * @type {Promise<IndexeddbPersistence>}
      */
     this.whenSynced = dbpromise.then(db => {
-      this.open = true
       /**
        * @param {IDBObjectStore} updatesStore
        */
@@ -225,10 +227,19 @@ export class IndexeddbPersistence extends Observable {
     /**
      * @param {Uint8Array} update
      * @param {any} origin
+     * @param {any} retries
      */
-    this._storeUpdate = (update, origin) => {
-      if (this.open && origin !== this && dbcached) {
-        const [updatesStore] = idb.transact(/** @type {IDBDatabase} */ dbcached, [this.updatesStoreName])
+    this._storeUpdate = (update, origin, retries = 0) => {
+      if (origin !== this && this.created) {
+        // logarithmic retry if database is being upgraded
+        if (/** @type {IDBDatabase} */(dbcached).version !== dbversion) {
+          if (isNaN(retries)) {
+            retries = 0
+          }
+          setTimeout(() => this._storeUpdate(update, origin, retries + 1), Math.pow(retries, 2))
+          return
+        }
+        const [updatesStore] = idb.transact(/** @type {IDBDatabase} */ (dbcached), [this.updatesStoreName])
         idb.addAutoKey(updatesStore, update)
         if (++this._dbsize >= PREFERRED_TRIM_SIZE) {
           // debounce store call
