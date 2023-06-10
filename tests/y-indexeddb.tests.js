@@ -211,12 +211,12 @@ export const testClearDataMultipleDocs = async tc => {
   // persistence1 should have no updates
   const db = await idb.openDB('y-indexeddb', () => {})
   const [customStore, updatesStore] = idb.transact(db, ['custom', 'updates'])
-  const updates = await idb.getAll(updatesStore, idb.createIDBKeyRangeLowerBound(0, false))
-  t.assert(updates.length === 0)
+  const updates = await idb.getAll(updatesStore)
+  t.assert(updates.every(({ name }) => name !== 'doc1'))
 
   // persistence1 should have no custom values
-  const custom = await idb.getAll(customStore, idb.createIDBKeyRangeLowerBound(0, false))
-  t.assert(custom.length === 0)
+  const custom = await idb.getAll(customStore)
+  t.assert(custom.every(({ name }) => name !== 'doc1'))
 
   // persistence2 should be preserved
   const resB = await persistence2.get('b')
@@ -247,12 +247,12 @@ export const testClearDocumentMultipleDocs = async tc => {
   // persistence1 should have no updates
   const db = await idb.openDB('y-indexeddb', () => {})
   const [customStore, updatesStore] = idb.transact(db, ['custom', 'updates'])
-  const updates = await idb.getAll(updatesStore, idb.createIDBKeyRangeLowerBound(0, false))
-  t.assert(updates.length === 0)
+  const updates = await idb.getAll(updatesStore)
+  t.assert(updates.every(({ name }) => name !== 'doc1'))
 
   // persistence1 should have no custom values
-  const custom = await idb.getAll(customStore, idb.createIDBKeyRangeLowerBound(0, false))
-  t.assert(custom.length === 0)
+  const custom = await idb.getAll(customStore)
+  t.assert(custom.every(({ name }) => name !== 'doc1'))
 
   // persistence2 should be preserved
   const resB = await persistence2.get('b')

@@ -24,11 +24,11 @@ export const PREFERRED_TRIM_SIZE = 500
  */
 export const fetchUpdates = async (idbPersistence, beforeApplyUpdatesCallback = noop) => {
   const [updatesStore] = idb.transact(/** @type {IDBDatabase} */ (dbcached), [updatesStoreName]) // , 'readonly')
-  const index = updatesStore.index('name,id')
-  const updates = await idb.rtop(index.getAll(idb.createIDBKeyRangeBound(
-    [idbPersistence.name, idbPersistence._dbref], 
-    [idbPersistence.name, []], 
-    false, 
+  const updatesIndex = updatesStore.index('name,id')
+  const updates = await idb.rtop(updatesIndex.getAll(idb.createIDBKeyRangeBound(
+    [idbPersistence.name, idbPersistence._dbref],
+    [idbPersistence.name, []],
+    false,
     false
   )))
   if (!idbPersistence._destroyed) {
@@ -39,8 +39,8 @@ export const fetchUpdates = async (idbPersistence, beforeApplyUpdatesCallback = 
   }
   const lastKey = await idb.getLastKey(updatesStore)
   idbPersistence._dbref = lastKey + 1
-  const cnt = await idb.count(updatesStore)
-  idbPersistence._dbsize = cnt
+  const count = await idb.count(updatesStore)
+  idbPersistence._dbsize = count
   return updatesStore
 }
 
@@ -73,11 +73,25 @@ export const clear = async () => {
  * */
 export const clearDocument = async (name) => {
   const db = await (dbpromise || idb.openDB(dbname, () => {}))
-  const [customStore, updatesStore] = idb.transact(db, [customStoreName, updatesStoreName])
-  return Promise.all([
-    idb.del(customStore, idb.createIDBKeyRangeBound([name], [name, []], false, false)),
-    idb.del(updatesStore, idb.createIDBKeyRangeLowerBound(0, false))
-  ])
+  return new Promise((resolve, reject) => {
+    // resolve when transaction auto-commits
+    const tx = db.transaction([customStoreName, updatesStoreName], 'readwrite')
+    tx.oncomplete = resolve
+    tx.onerror = reject
+
+    // delete custom values
+    const customStore = tx.objectStore(customStoreName)
+    customStore.delete(idb.createIDBKeyRangeBound([name], [name, []], false, false))
+
+    // delete updates
+    const updatesStore = tx.objectStore(updatesStoreName)
+    const updatesIndex = updatesStore.index('name,id')
+
+    // get all keys from the index and then delete individually since there is no index.delete method
+    idb.rtop(updatesIndex.getAllKeys(idb.createIDBKeyRangeBound([name], [name, []], false, false))).then(keys => {
+      keys.forEach((/** @type {string} */key) => updatesStore.delete(key))
+    })
+  })
 }
 
 /**
@@ -217,13 +231,7 @@ export class IndexeddbPersistence extends Observable {
    */
   async clearData () {
     this.destroy()
-
-    const db = await (/** @type {Promise<IDBDatabase>} */(dbpromise))
-    const [customStore, updatesStore] = idb.transact(db, [customStoreName, updatesStoreName])
-    await Promise.all([
-      idb.del(customStore, idb.createIDBKeyRangeBound([this.name], [this.name, []], false, false)),
-      idb.del(updatesStore, idb.createIDBKeyRangeLowerBound(0, false))
-    ])
+    return clearDocument(this.name)
   }
 
   /**
