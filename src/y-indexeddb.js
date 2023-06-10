@@ -22,49 +22,51 @@ export const PREFERRED_TRIM_SIZE = 500
  * @param {IndexeddbPersistence} idbPersistence
  * @param {function(IDBObjectStore):void} [beforeApplyUpdatesCallback]
  */
-export const fetchUpdates = (idbPersistence, beforeApplyUpdatesCallback = noop) => {
+export const fetchUpdates = async (idbPersistence, beforeApplyUpdatesCallback = noop) => {
   const [updatesStore] = idb.transact(/** @type {IDBDatabase} */ (dbcached), [updatesStoreName]) // , 'readonly')
   const index = updatesStore.index('name,id')
-  return idb.rtop(index.getAll(idb.createIDBKeyRangeBound(
-    [idbPersistence.name, idbPersistence._dbref],
-    [idbPersistence.name, []],
-    false,
+  const updates = await idb.rtop(index.getAll(idb.createIDBKeyRangeBound(
+    [idbPersistence.name, idbPersistence._dbref], 
+    [idbPersistence.name, []], 
+    false, 
     false
-  ))).then(updates => {
-    if (!idbPersistence._destroyed) {
-      beforeApplyUpdatesCallback(updatesStore)
-      Y.transact(idbPersistence.doc, () => {
-        updates.forEach((/** @type {{ update: Uint8Array }} */{ update }) => Y.applyUpdate(idbPersistence.doc, update))
-      }, idbPersistence, false)
-    }
-  })
-    .then(() => idb.getLastKey(updatesStore).then(lastKey => { idbPersistence._dbref = lastKey + 1 }))
-    .then(() => idb.count(updatesStore).then(cnt => { idbPersistence._dbsize = cnt }))
-    .then(() => updatesStore)
+  )))
+  if (!idbPersistence._destroyed) {
+    beforeApplyUpdatesCallback(updatesStore)
+    Y.transact(idbPersistence.doc, () => {
+      updates.forEach((/** @type {{ update: Uint8Array }} */record) => Y.applyUpdate(idbPersistence.doc, record.update))
+    }, idbPersistence, false)
+  }
+  const lastKey = await idb.getLastKey(updatesStore)
+  idbPersistence._dbref = lastKey + 1
+  const cnt = await idb.count(updatesStore)
+  idbPersistence._dbsize = cnt
+  return updatesStore
 }
 
 /**
  * @param {IndexeddbPersistence} idbPersistence
  * @param {boolean} forceStore
  */
-export const storeState = (idbPersistence, forceStore = true) =>
-  fetchUpdates(idbPersistence)
-    .then(updatesStore => {
-      if (forceStore || idbPersistence._dbsize >= PREFERRED_TRIM_SIZE) {
-        idb.rtop(updatesStore.add({
-          name: idbPersistence.name,
-          update: Y.encodeStateAsUpdate(idbPersistence.doc)
-        }))
-          .then(() => idb.del(updatesStore, idb.createIDBKeyRangeUpperBound(idbPersistence._dbref, true)))
-          .then(() => idb.count(updatesStore).then(cnt => { idbPersistence._dbsize = cnt }))
-      }
-    })
+export const storeState = async (idbPersistence, forceStore = true) => {
+  const updatesStore = await fetchUpdates(idbPersistence)
+  if (forceStore || idbPersistence._dbsize >= PREFERRED_TRIM_SIZE) {
+    await idb.rtop(updatesStore.add({
+      name: idbPersistence.name,
+      update: Y.encodeStateAsUpdate(idbPersistence.doc)
+    }))
+    await idb.del(updatesStore, idb.createIDBKeyRangeUpperBound(idbPersistence._dbref, true))
+    const cnt = await idb.count(updatesStore)
+    idbPersistence._dbsize = cnt
+  }
+}
 
 /** Deletes the entire database. */
-export const clear = () => idb.deleteDB(dbname).then(() => {
+export const clear = async () => {
+  await idb.deleteDB(dbname)
   dbpromise = undefined
   dbcached = undefined
-})
+}
 
 /** Deletes a document from the database. We need a standalone method as a way to delete a persisted Doc if there is no IndexedDBPersistence instance. If you have an IndexedDBPersistence instance, call the clearData instance methnod.
  * @param {string} name
