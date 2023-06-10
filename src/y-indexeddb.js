@@ -14,9 +14,31 @@ let dbpromise
 /** @type {IDBDatabase | undefined} */
 let dbcached
 
+export const PREFERRED_TRIM_SIZE = 500
+
 const noop = () => {}
 
-export const PREFERRED_TRIM_SIZE = 500
+/**
+ * Creates an IDBKeyRange for the name,id index on the updates object store that includes all updates for the Doc with the given name.
+ * @param {string} name
+ */
+const keyRangeIndexAll = name => idb.createIDBKeyRangeBound([name], [name, []], false, false)
+
+/**
+ * Creates an IDBKeyRange for the name,id index on the updates object store that includes updates for the Doc with the given name from the given lower bound update key to the latest update.
+ * @param {string} name
+ * @param {number} lower
+ * @param {boolean} lowerOpen
+ */
+const keyRangeIndexLowerBound = (name, lower, lowerOpen) => idb.createIDBKeyRangeBound([name, lower], [name, []], lowerOpen, false)
+
+/**
+ * Creates an IDBKeyRange for the name,id index on the updates object store that includes updates for the Doc with the given name starting from the oldest update to the given upper bound update key.
+ * @param {string} name
+ * @param {number} upper
+ * @param {boolean} upperOpen
+ */
+const keyRangeIndexUpperBound = (name, upper, upperOpen) => idb.createIDBKeyRangeBound([name], [name, upper], false, upperOpen)
 
 /**
  * @param {IndexeddbPersistence} idbPersistence
@@ -25,21 +47,16 @@ export const PREFERRED_TRIM_SIZE = 500
 export const fetchUpdates = async (idbPersistence, beforeApplyUpdatesCallback = noop) => {
   const [updatesStore] = idb.transact(/** @type {IDBDatabase} */ (dbcached), [updatesStoreName]) // , 'readonly')
   const updatesIndex = updatesStore.index('name,id')
-  const updates = await idb.rtop(updatesIndex.getAll(idb.createIDBKeyRangeBound(
-    [idbPersistence.name, idbPersistence._dbref],
-    [idbPersistence.name, []],
-    false,
-    false
-  )))
+  const updates = await idb.rtop(updatesIndex.getAll(keyRangeIndexLowerBound(idbPersistence.name, idbPersistence._dbref, false)))
   if (!idbPersistence._destroyed) {
     beforeApplyUpdatesCallback(updatesStore)
     Y.transact(idbPersistence.doc, () => {
       updates.forEach((/** @type {{ update: Uint8Array }} */record) => Y.applyUpdate(idbPersistence.doc, record.update))
     }, idbPersistence, false)
   }
-  const lastKey = await idb.getLastKey(updatesStore)
+  const [,lastKey] = await idb.getLastKey(/** @type {any} */(updatesIndex), keyRangeIndexAll(idbPersistence.name))
   idbPersistence._dbref = lastKey + 1
-  const count = await idb.count(updatesStore)
+  const count = await idb.rtop(updatesIndex.count(keyRangeIndexAll(idbPersistence.name)))
   idbPersistence._dbsize = count
   return updatesStore
 }
@@ -55,9 +72,12 @@ export const storeState = async (idbPersistence, forceStore = true) => {
       name: idbPersistence.name,
       update: Y.encodeStateAsUpdate(idbPersistence.doc)
     }))
-    await idb.del(updatesStore, idb.createIDBKeyRangeUpperBound(idbPersistence._dbref, true))
-    const cnt = await idb.count(updatesStore)
-    idbPersistence._dbsize = cnt
+    const updatesIndex = updatesStore.index('name,id')
+    // resolve when transaction auto-commits
+    const keys = await idb.rtop(updatesIndex.getAllKeys(keyRangeIndexUpperBound(idbPersistence.name, idbPersistence._dbref, true)))
+    keys.forEach((/** @type {number} */key) => updatesStore.delete(key))
+    const count = await idb.rtop(updatesIndex.count(keyRangeIndexAll(idbPersistence.name)))
+    idbPersistence._dbsize = count
   }
 }
 
@@ -81,15 +101,15 @@ export const clearDocument = async (name) => {
 
     // delete custom values
     const customStore = tx.objectStore(customStoreName)
-    customStore.delete(idb.createIDBKeyRangeBound([name], [name, []], false, false))
+    customStore.delete(keyRangeIndexAll(name))
 
     // delete updates
     const updatesStore = tx.objectStore(updatesStoreName)
     const updatesIndex = updatesStore.index('name,id')
 
     // get all keys from the index and then delete individually since there is no index.delete method
-    idb.rtop(updatesIndex.getAllKeys(idb.createIDBKeyRangeBound([name], [name, []], false, false))).then(keys => {
-      keys.forEach((/** @type {string} */key) => updatesStore.delete(key))
+    idb.rtop(updatesIndex.getAllKeys(keyRangeIndexAll(name))).then(keys => {
+      keys.forEach((/** @type {number} */key) => updatesStore.delete(key))
     })
   })
 }
