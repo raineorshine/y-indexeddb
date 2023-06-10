@@ -6,11 +6,6 @@ const dbname = 'y-indexeddb'
 const customStoreName = 'custom'
 const updatesStoreName = 'updates'
 
-// The db version must be incremented for each new doc in order to trigger onupgradeneeded and create new object stores.
-// It is initiated from db.version of the first open connection, then incremented at pace with db upgrades.
-/** @type {number | undefined} */
-let dbversion
-
 // A promiseed IDBDatabase connection. The promise object reference will change whenever a new IndexedDBPersistence is instantiated, as it needs to open a new connection to add new object stores. */
 /** @type {Promise<IDBDatabase> | undefined} */
 let dbpromise
@@ -60,79 +55,19 @@ export const storeState = (idbPersistence, forceStore = true) =>
 export const clear = () => idb.deleteDB(dbname).then(() => {
   dbpromise = undefined
   dbcached = undefined
-  dbversion = undefined
 })
 
 /** Deletes a document from the database. We need a standalone method as a way to delete a persisted Doc if there is no IndexedDBPersistence instance. If you have an IndexedDBPersistence instance, call the clearData instance methnod.
  * @param {string} name
  * */
 export const clearDocument = async (name) => {
-  const db = await (dbpromise || openDBWithVersion(dbname, () => {}, true))
+  const db = await (dbpromise || idb.openDB(dbname, () => {}))
   const [customStore, updatesStore] = idb.transact(db, [customStoreName, updatesStoreName])
   return Promise.all([
     idb.del(customStore, idb.createIDBKeyRangeLowerBound(0, false)),
     idb.del(updatesStore, idb.createIDBKeyRangeLowerBound(0, false))
   ])
 }
-
-/* istanbul ignore next */
-/**
- * @param {string} name
- * @param {function(IDBDatabase):any} initDB Called when the database is first created
- * @param {boolean?} reopen Reopen the database without incrementing the version
- * @return {Promise<IDBDatabase>}
- */
-const openDBWithVersion = (name, initDB, reopen) => new Promise((resolve, reject) => {
-  // increment the db version in order to add new object stores
-  // otherwise, just use the latest db version
-  const version = reopen || !dbversion ? dbversion : ++dbversion
-  // eslint-disable-next-line
-  const request = indexedDB.open(name, version)
-
-  /**
-   * @param {any} event
-   */
-  request.onupgradeneeded = event => {
-    try {
-      initDB(event.target.result)
-    } catch (e) {
-      reject(e)
-    }
-  }
-
-  /* istanbul ignore next */
-  /**
-   * @param {any} event
-   */
-  request.onerror = event => {
-    reject(new Error(event.target.error))
-  }
-  /**
-   * @param {any} event
-   */
-  request.onsuccess = event => {
-    /**
-     * @type {IDBDatabase}
-     */
-    const db = event.target.result
-    dbcached = db
-
-    if (!dbversion) {
-      dbversion = db.version
-    }
-
-    /* istanbul ignore next */
-    db.onversionchange = () => db.close()
-
-    /* istanbul ignore if */
-    if (typeof addEventListener !== 'undefined') {
-      // eslint-disable-next-line
-      addEventListener('unload', close)
-    }
-
-    resolve(db)
-  }
-})
 
 /**
  * @extends Observable<string>
@@ -152,12 +87,12 @@ export class IndexeddbPersistence extends Observable {
     this.created = false
     this.synced = false
 
-    dbpromise = dbpromise || openDBWithVersion(dbname, db => {
+    dbpromise = dbpromise || idb.openDB(dbname, db => {
       idb.createStores(db, [
         [customStoreName],
         [updatesStoreName, { autoIncrement: true }]
       ])
-    }, false).then(db => {
+    }).then(db => {
       dbcached = db
       return db
     })
@@ -194,14 +129,6 @@ export class IndexeddbPersistence extends Observable {
      */
     this._storeUpdate = (update, origin, retries = 0) => {
       if (origin !== this && this.created) {
-        // logarithmic retry if database is being upgraded
-        if (/** @type {IDBDatabase} */(dbcached).version !== dbversion) {
-          if (isNaN(retries)) {
-            retries = 0
-          }
-          setTimeout(() => this._storeUpdate(update, origin, retries + 1), Math.pow(retries, 2))
-          return
-        }
         const [updatesStore] = idb.transact(/** @type {IDBDatabase} */ (dbcached), [updatesStoreName])
         idb.addAutoKey(updatesStore, update)
         if (++this._dbsize >= PREFERRED_TRIM_SIZE) {
