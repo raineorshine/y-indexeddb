@@ -67,10 +67,45 @@ export const clearDocument = async (name) => {
   const db = await (dbpromise || idb.openDB(dbname, () => {}))
   const [customStore, updatesStore] = idb.transact(db, [customStoreName, updatesStoreName])
   return Promise.all([
-    idb.del(customStore, idb.createIDBKeyRangeLowerBound(0, false)),
+    idb.del(customStore, idb.createIDBKeyRangeBound([name], [name, []], false, false)),
     idb.del(updatesStore, idb.createIDBKeyRangeLowerBound(0, false))
   ])
 }
+
+/**
+ * Modified idb.openDB to pass the upgrade transaction to initDB for creating an index.
+ * @param {string} name
+ * @param {function(IDBDatabase, IDBTransaction):any} initDB Called when the database is first created
+ * @return {Promise<IDBDatabase>}
+ */
+export const openDBWithUpgradeTransaction = (name, initDB) => new Promise((resolve, reject) => {
+  // eslint-disable-next-line
+  const request = indexedDB.open(name)
+  /**
+   * @param {any} event
+   */
+  request.onupgradeneeded = event => initDB(event.target.result, event.target.transaction)
+  /**
+   * @param {any} event
+   */
+  request.onerror = event => reject(new Error(event.target.error))
+  /**
+   * @param {any} event
+   */
+  request.onsuccess = event => {
+    /**
+     * @type {IDBDatabase}
+     */
+    const db = event.target.result
+    db.onversionchange = () => { db.close() }
+
+    if (typeof addEventListener !== 'undefined') {
+      // eslint-disable-next-line
+      addEventListener('unload', () => db.close())
+    }
+    resolve(db)
+  }
+})
 
 /**
  * @extends Observable<string>
@@ -90,11 +125,13 @@ export class IndexeddbPersistence extends Observable {
     this.created = false
     this.synced = false
 
-    dbpromise = dbpromise || idb.openDB(dbname, db => {
+    dbpromise = dbpromise || openDBWithUpgradeTransaction(dbname, (db, tx) => {
       idb.createStores(db, [
         [customStoreName],
         [updatesStoreName, { autoIncrement: true, keyPath: 'id' }]
       ])
+      const updatesStore = tx.objectStore(updatesStoreName)
+      updatesStore.createIndex('name,id', ['name', 'id'])
     }).then(db => {
       dbcached = db
       return db
@@ -176,7 +213,7 @@ export class IndexeddbPersistence extends Observable {
     const db = await (/** @type {Promise<IDBDatabase>} */(dbpromise))
     const [customStore, updatesStore] = idb.transact(db, [customStoreName, updatesStoreName])
     await Promise.all([
-      idb.del(customStore, idb.createIDBKeyRangeLowerBound(0, false)),
+      idb.del(customStore, idb.createIDBKeyRangeBound([this.name], [this.name, []], false, false)),
       idb.del(updatesStore, idb.createIDBKeyRangeLowerBound(0, false))
     ])
   }
@@ -188,7 +225,7 @@ export class IndexeddbPersistence extends Observable {
   async get (key) {
     const db = await (/** @type {Promise<IDBDatabase>} */(dbpromise))
     const [custom] = idb.transact(db, [customStoreName], 'readonly')
-    const { value } = await idb.rtop(custom.get(key))
+    const { value } = await idb.rtop(custom.get([this.name, key]))
     return value
   }
 
@@ -200,7 +237,7 @@ export class IndexeddbPersistence extends Observable {
   async set (key, value) {
     const db = await (/** @type {Promise<IDBDatabase>} */(dbpromise))
     const [custom] = idb.transact(db, [customStoreName])
-    return idb.rtop(custom.put({ name: this.name, value }, key))
+    return idb.rtop(custom.put({ name: this.name, value }, [this.name, key]))
   }
 
   /**
@@ -210,6 +247,6 @@ export class IndexeddbPersistence extends Observable {
   async del (key) {
     const db = await (/** @type {Promise<IDBDatabase>} */(dbpromise))
     const [custom] = idb.transact(db, [customStoreName])
-    return idb.del(custom, key)
+    return idb.del(custom, [this.name, key])
   }
 }
