@@ -6,11 +6,11 @@ const dbname = 'y-indexeddb'
 const customStoreName = 'custom'
 const updatesStoreName = 'updates'
 
-// A promiseed IDBDatabase connection. The promise object reference will change whenever a new IndexedDBPersistence is instantiated, as it needs to open a new connection to add new object stores. */
+// A promiseed IDBDatabase connection. Opened once when first constructed, then kept open. */
 /** @type {Promise<IDBDatabase> | undefined} */
 let dbpromise
 
-// A cached IDBDatabase instance from the last resolved dbpromise.
+// A cached IDBDatabase instance from the resolved dbpromise. Used by synchronous functions like fetchUpdates that assume the db has already been opened.
 /** @type {IDBDatabase | undefined} */
 let dbcached
 
@@ -115,7 +115,7 @@ export class IndexeddbPersistence extends Observable {
     })
 
     /**
-     * Timeout in ms untill data is merged and persisted in idb.
+     * Timeout in ms until data is merged and persisted in idb.
      */
     this._storeTimeout = 1000
     /**
@@ -164,33 +164,24 @@ export class IndexeddbPersistence extends Observable {
    * @return {Promise<void>}
    */
   async clearData () {
-    if (!dbpromise) {
-      throw new Error(`clearData() of IndexeddbPersistence instance "${this.name}" cannot be called after clear.`)
-    }
-
     this.destroy()
 
-    return dbpromise.then(async db => {
-      const [customStore, updatesStore] = idb.transact(db, [customStoreName, updatesStoreName])
-      await Promise.all([
-        idb.del(customStore, idb.createIDBKeyRangeLowerBound(0, false)),
-        idb.del(updatesStore, idb.createIDBKeyRangeLowerBound(0, false))
-      ])
-    })
+    const db = await (/** @type {Promise<IDBDatabase>} */(dbpromise))
+    const [customStore, updatesStore] = idb.transact(db, [customStoreName, updatesStoreName])
+    await Promise.all([
+      idb.del(customStore, idb.createIDBKeyRangeLowerBound(0, false)),
+      idb.del(updatesStore, idb.createIDBKeyRangeLowerBound(0, false))
+    ])
   }
 
   /**
    * @param {String | number | ArrayBuffer | Date} key
    * @return {Promise<String | number | ArrayBuffer | Date | any>}
    */
-  get (key) {
-    if (!dbpromise) {
-      throw new Error(`get() of IndexeddbPersistence instance "${this.name}" cannot be called after clear.`)
-    }
-    return dbpromise.then(db => {
-      const [custom] = idb.transact(db, [customStoreName], 'readonly')
-      return idb.get(custom, key)
-    })
+  async get (key) {
+    const db = await (/** @type {Promise<IDBDatabase>} */(dbpromise))
+    const [custom] = idb.transact(db, [customStoreName], 'readonly')
+    return idb.get(custom, key)
   }
 
   /**
@@ -198,27 +189,19 @@ export class IndexeddbPersistence extends Observable {
    * @param {String | number | ArrayBuffer | Date} value
    * @return {Promise<String | number | ArrayBuffer | Date>}
    */
-  set (key, value) {
-    if (!dbpromise) {
-      throw new Error(`set() of IndexeddbPersistence instance "${this.name}" cannot be called after clear.`)
-    }
-    return dbpromise.then(db => {
-      const [custom] = idb.transact(db, [customStoreName])
-      return idb.put(custom, value, key)
-    })
+  async set (key, value) {
+    const db = await (/** @type {Promise<IDBDatabase>} */(dbpromise))
+    const [custom] = idb.transact(db, [customStoreName])
+    return idb.put(custom, value, key)
   }
 
   /**
    * @param {String | number | ArrayBuffer | Date} key
    * @return {Promise<undefined>}
    */
-  del (key) {
-    if (!dbpromise) {
-      throw new Error(`del() of IndexeddbPersistence instance "${this.name}" cannot be called after clear.`)
-    }
-    return dbpromise.then(db => {
-      const [custom] = idb.transact(db, [customStoreName])
-      return idb.del(custom, key)
-    })
+  async del (key) {
+    const db = await (/** @type {Promise<IDBDatabase>} */(dbpromise))
+    const [custom] = idb.transact(db, [customStoreName])
+    return idb.del(custom, key)
   }
 }
