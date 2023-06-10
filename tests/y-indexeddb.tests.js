@@ -142,7 +142,57 @@ export const testMultipleDocs = async tc => {
 /**
  * @param {t.TestCase} tc
  */
-export const testClearData = async tc => {
+export const testClearDataSingleDoc = async tc => {
+  // this document will be cleared
+  const doc1 = new Y.Doc()
+  const persistence1 = new IndexeddbPersistence(tc.testName, doc1)
+  persistence1.set('a', 4)
+
+  // clear persistence1
+  await persistence1.clearData()
+
+  // persistence1 should have no updates
+  const db = await idb.openDB('y-indexeddb', () => {})
+  const [customStore, updatesStore] = idb.transact(db, ['custom', 'updates'])
+  const updates = await idb.getAll(updatesStore, idb.createIDBKeyRangeLowerBound(0, false))
+  t.assert(updates.length === 0)
+
+  // persistence1 should have no custom values
+  const custom = await idb.getAll(customStore, idb.createIDBKeyRangeLowerBound(0, false))
+  t.assert(custom.length === 0)
+
+  await clear()
+}
+
+/**
+ * @param {t.TestCase} tc
+ */
+export const testClearDocumentSingleDoc = async tc => {
+  // this document will be cleared
+  const doc1 = new Y.Doc()
+  const persistence1 = new IndexeddbPersistence(tc.testName, doc1)
+  persistence1.set('a', 4)
+
+  // clear persistence1
+  await clearDocument(tc.testName)
+
+  // persistence1 should have no updates
+  const db = await idb.openDB('y-indexeddb', () => {})
+  const [customStore, updatesStore] = idb.transact(db, ['custom', 'updates'])
+  const updates = await idb.getAll(updatesStore, idb.createIDBKeyRangeLowerBound(0, false))
+  t.assert(updates.length === 0)
+
+  // persistence1 should have no custom values
+  const custom = await idb.getAll(customStore, idb.createIDBKeyRangeLowerBound(0, false))
+  t.assert(custom.length === 0)
+
+  await clear()
+}
+
+/**
+ * @param {t.TestCase} tc
+ */
+export const testClearDataMultipleDocs = async tc => {
   // this document will be cleared
   const doc1 = new Y.Doc()
   const persistence1 = new IndexeddbPersistence(tc.testName, doc1)
@@ -158,19 +208,15 @@ export const testClearData = async tc => {
   // clear persistence1
   await persistence1.clearData()
 
-  // persistence1 object stores should be deleted
+  // persistence1 should have no updates
   const db = await idb.openDB('y-indexeddb', () => {})
-  t.assert(db)
-  t.assert(db.objectStoreNames.length === 2)
+  const [customStore, updatesStore] = idb.transact(db, ['custom', 'updates'])
+  const updates = await idb.getAll(updatesStore, idb.createIDBKeyRangeLowerBound(0, false))
+  t.assert(updates.length === 0)
 
-  // persistence1 should not exist and throw an error on get
-  let error
-  try {
-    await persistence1.get('a')
-  } catch (/** @type {any} */e) {
-    error = e.message
-  }
-  t.assert(error)
+  // persistence1 should have no custom values
+  const custom = await idb.getAll(customStore, idb.createIDBKeyRangeLowerBound(0, false))
+  t.assert(custom.length === 0)
 
   // persistence2 should be preserved
   const resB = await persistence2.get('b')
@@ -182,7 +228,7 @@ export const testClearData = async tc => {
 /**
  * @param {t.TestCase} tc
  */
-export const testClearDocument = async tc => {
+export const testClearDocumentMultipleDocs = async tc => {
   // this document will be cleared
   const doc1 = new Y.Doc()
   const persistence1 = new IndexeddbPersistence(tc.testName, doc1)
@@ -198,19 +244,15 @@ export const testClearDocument = async tc => {
   // clear persistence1
   await clearDocument(tc.testName)
 
-  // persistence1 object stores should be deleted
+  // persistence1 should have no updates
   const db = await idb.openDB('y-indexeddb', () => {})
-  t.assert(db)
-  t.assert(db.objectStoreNames.length === 2)
+  const [customStore, updatesStore] = idb.transact(db, ['custom', 'updates'])
+  const updates = await idb.getAll(updatesStore, idb.createIDBKeyRangeLowerBound(0, false))
+  t.assert(updates.length === 0)
 
-  // persistence1 should not exist and throw an error on get
-  let error
-  try {
-    await persistence1.get('a')
-  } catch (/** @type {any} */e) {
-    error = e.message
-  }
-  t.assert(error)
+  // persistence1 should have no custom values
+  const custom = await idb.getAll(customStore, idb.createIDBKeyRangeLowerBound(0, false))
+  t.assert(custom.length === 0)
 
   // persistence2 should be preserved
   const resB = await persistence2.get('b')
