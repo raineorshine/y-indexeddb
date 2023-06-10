@@ -28,7 +28,7 @@ export const fetchUpdates = (idbPersistence, beforeApplyUpdatesCallback = noop) 
     if (!idbPersistence._destroyed) {
       beforeApplyUpdatesCallback(updatesStore)
       Y.transact(idbPersistence.doc, () => {
-        updates.forEach(val => Y.applyUpdate(idbPersistence.doc, val))
+        updates.forEach(({ update }) => Y.applyUpdate(idbPersistence.doc, update))
       }, idbPersistence, false)
     }
   })
@@ -45,7 +45,9 @@ export const storeState = (idbPersistence, forceStore = true) =>
   fetchUpdates(idbPersistence)
     .then(updatesStore => {
       if (forceStore || idbPersistence._dbsize >= PREFERRED_TRIM_SIZE) {
-        idb.addAutoKey(updatesStore, Y.encodeStateAsUpdate(idbPersistence.doc))
+        idb.rtop(updatesStore.add({
+          update: Y.encodeStateAsUpdate(idbPersistence.doc)
+        }))
           .then(() => idb.del(updatesStore, idb.createIDBKeyRangeUpperBound(idbPersistence._dbref, true)))
           .then(() => idb.count(updatesStore).then(cnt => { idbPersistence._dbsize = cnt }))
       }
@@ -90,7 +92,7 @@ export class IndexeddbPersistence extends Observable {
     dbpromise = dbpromise || idb.openDB(dbname, db => {
       idb.createStores(db, [
         [customStoreName],
-        [updatesStoreName, { autoIncrement: true }]
+        [updatesStoreName, { autoIncrement: true, keyPath: 'id' }]
       ])
     }).then(db => {
       dbcached = db
@@ -105,7 +107,10 @@ export class IndexeddbPersistence extends Observable {
       /**
        * @param {IDBObjectStore} updatesStore
        */
-      const beforeApplyUpdatesCallback = (updatesStore) => idb.addAutoKey(updatesStore, Y.encodeStateAsUpdate(doc))
+      const beforeApplyUpdatesCallback = (updatesStore) =>
+        idb.rtop(updatesStore.add({
+          update: Y.encodeStateAsUpdate(doc)
+        }))
       return fetchUpdates(this, beforeApplyUpdatesCallback).then(() => {
         if (this._destroyed) return this
         this.emit('synced', [this])
@@ -130,7 +135,7 @@ export class IndexeddbPersistence extends Observable {
     this._storeUpdate = (update, origin, retries = 0) => {
       if (origin !== this && this.created) {
         const [updatesStore] = idb.transact(/** @type {IDBDatabase} */ (dbcached), [updatesStoreName])
-        idb.addAutoKey(updatesStore, update)
+        idb.rtop(updatesStore.add({ update }))
         if (++this._dbsize >= PREFERRED_TRIM_SIZE) {
           // debounce store call
           if (this._storeTimeoutId !== null) {
@@ -181,7 +186,8 @@ export class IndexeddbPersistence extends Observable {
   async get (key) {
     const db = await (/** @type {Promise<IDBDatabase>} */(dbpromise))
     const [custom] = idb.transact(db, [customStoreName], 'readonly')
-    return idb.get(custom, key)
+    const { value } = await idb.rtop(custom.get(key))
+    return value
   }
 
   /**
@@ -192,7 +198,7 @@ export class IndexeddbPersistence extends Observable {
   async set (key, value) {
     const db = await (/** @type {Promise<IDBDatabase>} */(dbpromise))
     const [custom] = idb.transact(db, [customStoreName])
-    return idb.put(custom, value, key)
+    return idb.rtop(custom.put({ value }, key))
   }
 
   /**
