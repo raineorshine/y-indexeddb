@@ -16,8 +16,6 @@ let dbcached
 
 export const PREFERRED_TRIM_SIZE = 500
 
-const noop = () => {}
-
 /**
  * Creates an IDBKeyRange for the name,id index on the updates object store that includes all updates for the Doc with the given name.
  * @param {string} name
@@ -44,17 +42,19 @@ const keyRangeIndexUpperBound = (name, upper, upperOpen) => idb.createIDBKeyRang
  * @param {IndexeddbPersistence} idbPersistence
  * @param {function(IDBObjectStore):void} [beforeApplyUpdatesCallback]
  */
-export const fetchUpdates = async (idbPersistence, beforeApplyUpdatesCallback = noop) => {
+export const fetchUpdates = async (idbPersistence, beforeApplyUpdatesCallback) => {
   const [updatesStore] = idb.transact(/** @type {IDBDatabase} */ (dbcached), [updatesStoreName]) // , 'readonly')
   const updatesIndex = updatesStore.index('name,id')
   const updates = await idb.rtop(updatesIndex.getAll(keyRangeIndexLowerBound(idbPersistence.name, idbPersistence._dbref, false)))
   if (!idbPersistence._destroyed) {
-    beforeApplyUpdatesCallback(updatesStore)
+    if (beforeApplyUpdatesCallback) {
+      beforeApplyUpdatesCallback(updatesStore)
+    }
     Y.transact(idbPersistence.doc, () => {
       updates.forEach((/** @type {{ update: Uint8Array }} */record) => Y.applyUpdate(idbPersistence.doc, record.update))
     }, idbPersistence, false)
   }
-  const [,lastKey] = await idb.getLastKey(/** @type {any} */(updatesIndex), keyRangeIndexAll(idbPersistence.name))
+  const [, lastKey] = await idb.getLastKey(/** @type {any} */(updatesIndex), keyRangeIndexAll(idbPersistence.name))
   idbPersistence._dbref = lastKey + 1
   const count = await idb.rtop(updatesIndex.count(keyRangeIndexAll(idbPersistence.name)))
   idbPersistence._dbsize = count
@@ -211,9 +211,8 @@ export class IndexeddbPersistence extends Observable {
     /**
      * @param {Uint8Array} update
      * @param {any} origin
-     * @param {any} retries
      */
-    this._storeUpdate = (update, origin, retries = 0) => {
+    this._storeUpdate = (update, origin) => {
       if (origin !== this && this.created) {
         const [updatesStore] = idb.transact(/** @type {IDBDatabase} */ (dbcached), [updatesStoreName])
         idb.rtop(updatesStore.add({ name: this.name, update }))
@@ -241,7 +240,6 @@ export class IndexeddbPersistence extends Observable {
     this.doc.off('update', this._storeUpdate)
     this.doc.off('destroy', this.destroy)
     this._destroyed = true
-    return dbpromise
   }
 
   /**
