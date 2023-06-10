@@ -46,6 +46,7 @@ export const storeState = (idbPersistence, forceStore = true) =>
     .then(updatesStore => {
       if (forceStore || idbPersistence._dbsize >= PREFERRED_TRIM_SIZE) {
         idb.rtop(updatesStore.add({
+          name: idbPersistence.name,
           update: Y.encodeStateAsUpdate(idbPersistence.doc)
         }))
           .then(() => idb.del(updatesStore, idb.createIDBKeyRangeUpperBound(idbPersistence._dbref, true)))
@@ -109,6 +110,7 @@ export class IndexeddbPersistence extends Observable {
        */
       const beforeApplyUpdatesCallback = (updatesStore) =>
         idb.rtop(updatesStore.add({
+          name: this.name,
           update: Y.encodeStateAsUpdate(doc)
         }))
       return fetchUpdates(this, beforeApplyUpdatesCallback).then(() => {
@@ -135,7 +137,7 @@ export class IndexeddbPersistence extends Observable {
     this._storeUpdate = (update, origin, retries = 0) => {
       if (origin !== this && this.created) {
         const [updatesStore] = idb.transact(/** @type {IDBDatabase} */ (dbcached), [updatesStoreName])
-        idb.rtop(updatesStore.add({ update }))
+        idb.rtop(updatesStore.add({ name: this.name, update }))
         if (++this._dbsize >= PREFERRED_TRIM_SIZE) {
           // debounce store call
           if (this._storeTimeoutId !== null) {
@@ -198,7 +200,7 @@ export class IndexeddbPersistence extends Observable {
   async set (key, value) {
     const db = await (/** @type {Promise<IDBDatabase>} */(dbpromise))
     const [custom] = idb.transact(db, [customStoreName])
-    return idb.rtop(custom.put({ value }, key))
+    return idb.rtop(custom.put({ name: this.name, value }, key))
   }
 
   /**
