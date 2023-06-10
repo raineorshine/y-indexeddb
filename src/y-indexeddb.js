@@ -24,11 +24,17 @@ export const PREFERRED_TRIM_SIZE = 500
  */
 export const fetchUpdates = (idbPersistence, beforeApplyUpdatesCallback = noop) => {
   const [updatesStore] = idb.transact(/** @type {IDBDatabase} */ (dbcached), [updatesStoreName]) // , 'readonly')
-  return idb.getAll(updatesStore, idb.createIDBKeyRangeLowerBound(idbPersistence._dbref, false)).then(updates => {
+  const index = updatesStore.index('name,id')
+  return idb.rtop(index.getAll(idb.createIDBKeyRangeBound(
+    [idbPersistence.name, idbPersistence._dbref],
+    [idbPersistence.name, []],
+    false,
+    false
+  ))).then(updates => {
     if (!idbPersistence._destroyed) {
       beforeApplyUpdatesCallback(updatesStore)
       Y.transact(idbPersistence.doc, () => {
-        updates.forEach(({ update }) => Y.applyUpdate(idbPersistence.doc, update))
+        updates.forEach((/** @type {{ update: Uint8Array }} */{ update }) => Y.applyUpdate(idbPersistence.doc, update))
       }, idbPersistence, false)
     }
   })
