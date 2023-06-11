@@ -6,6 +6,11 @@ const dbname = 'y-indexeddb'
 const customStoreName = 'custom'
 const updatesStoreName = 'updates'
 
+// All calls to fetchUpdates within this number of milliseconds will share an IDBTransaction for performance.
+const DEFERRED_TRANSACTION_TIMOUT = 5
+
+export const PREFERRED_TRIM_SIZE = 500
+
 // A promiseed IDBDatabase connection. Opened once when first constructed, then kept open. */
 /** @type {Promise<IDBDatabase> | undefined} */
 let dbpromise
@@ -14,7 +19,25 @@ let dbpromise
 /** @type {IDBDatabase | undefined} */
 let dbcached
 
-export const PREFERRED_TRIM_SIZE = 500
+/** @type {Promise<void>|null} */
+let deferredRef = null
+
+/**
+ * @param {function():void} f
+ * @return {Promise<any>}
+ */
+const deferred = async (f) => {
+  if (!deferredRef) {
+    deferredRef = new Promise(resolve => {
+      setTimeout(() => {
+        deferredRef = null
+        resolve(f())
+      }, DEFERRED_TRANSACTION_TIMOUT)
+    })
+  }
+
+  return deferredRef
+}
 
 /**
  * Creates an IDBKeyRange for the name,id index on the updates object store that includes all updates for the Doc with the given name.
@@ -40,25 +63,36 @@ const keyRangeIndexUpperBound = (name, upper, upperOpen) => idb.createIDBKeyRang
 
 /**
  * @param {IndexeddbPersistence} idbPersistence
- * @param {function(IDBObjectStore):void} [beforeApplyUpdatesCallback]
- * @param {function(IDBObjectStore):void} [afterApplyUpdatesCallback]
+ * @param {function(IDBObjectStore):void|Promise<void>} [beforeApplyUpdatesCallback]
+ * @param {function(IDBObjectStore):void|Promise<void>} [afterApplyUpdatesCallback]
+ * @return {Promise<IDBObjectStore|null>}
  */
 export const fetchUpdates = async (idbPersistence, beforeApplyUpdatesCallback = () => {}, afterApplyUpdatesCallback = () => {}) => {
-  const [updatesStore] = idb.transact(/** @type {IDBDatabase} */ (dbcached), [updatesStoreName]) // , 'readonly')
+  /** @type {IDBTransaction|null} */
+  const tx = await deferred(() => {
+    if (!dbcached) return null
+    return dbcached.transaction([updatesStoreName], 'readwrite')
+  })
+
+  if (!tx) return null
+
+  const updatesStore = tx.objectStore(updatesStoreName)
   const updatesIndex = updatesStore.index('name,id')
-  const updates = await idb.rtop(updatesIndex.getAll(keyRangeIndexLowerBound(idbPersistence.name, idbPersistence._dbref, false)))
+  const req = updatesIndex.getAll(keyRangeIndexLowerBound(idbPersistence.name, idbPersistence._dbref, false))
+  const updates = await idb.rtop(req)
   if (!idbPersistence._destroyed) {
-    beforeApplyUpdatesCallback(updatesStore)
+    await beforeApplyUpdatesCallback(updatesStore)
     Y.transact(idbPersistence.doc, () => {
       updates.forEach((/** @type {{ update: Uint8Array }} */record) => Y.applyUpdate(idbPersistence.doc, record.update))
     }, idbPersistence, false)
-    afterApplyUpdatesCallback(updatesStore)
-
-    const [, lastKey] = await idb.getLastKey(/** @type {any} */(updatesIndex), keyRangeIndexAll(idbPersistence.name))
-    idbPersistence._dbref = lastKey + 1
-    const count = await idb.rtop(updatesIndex.count(keyRangeIndexAll(idbPersistence.name)))
-    idbPersistence._dbsize = count
+    await afterApplyUpdatesCallback(updatesStore)
   }
+
+  const [, lastKey] = await idb.getLastKey(/** @type {any} */(updatesIndex), keyRangeIndexAll(idbPersistence.name))
+  idbPersistence._dbref = lastKey + 1
+  const count = await idb.rtop(updatesIndex.count(keyRangeIndexAll(idbPersistence.name)))
+  idbPersistence._dbsize = count
+
   return updatesStore
 }
 
@@ -68,7 +102,7 @@ export const fetchUpdates = async (idbPersistence, beforeApplyUpdatesCallback = 
  */
 export const storeState = async (idbPersistence, forceStore = true) => {
   const updatesStore = await fetchUpdates(idbPersistence)
-  if (forceStore || idbPersistence._dbsize >= PREFERRED_TRIM_SIZE) {
+  if (updatesStore && (forceStore || idbPersistence._dbsize >= PREFERRED_TRIM_SIZE)) {
     await idb.rtop(updatesStore.add({
       name: idbPersistence.name,
       update: Y.encodeStateAsUpdate(idbPersistence.doc)
@@ -91,9 +125,10 @@ export const clear = async () => {
 
 /** Deletes a document from the database. We need a standalone method as a way to delete a persisted Doc if there is no IndexedDBPersistence instance. If you have an IndexedDBPersistence instance, call the clearData instance methnod.
  * @param {string} name
- * */
+ */
 export const clearDocument = async (name) => {
   const db = await (dbpromise || idb.openDB(dbname, () => {}))
+  await deferredRef
   return new Promise((resolve, reject) => {
     // resolve when transaction auto-commits
     const tx = db.transaction([customStoreName, updatesStoreName], 'readwrite')
@@ -193,9 +228,8 @@ export class IndexeddbPersistence extends Observable {
           name: this.name,
           update: Y.encodeStateAsUpdate(doc)
         }))
-
       const afterApplyUpdatesCallback = () => {
-        if (this._destroyed) return this
+        if (this._destroyed) return
         this.synced = true
         this.emit('synced', [this])
       }

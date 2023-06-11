@@ -48,6 +48,7 @@ export const testIdbUpdateAndMerge = async tc => {
   for (let i = 2; i < PREFERRED_TRIM_SIZE + 1; i++) {
     arr1.insert(i, [i])
   }
+  // must be higher than deferred transaction timeout
   await promise.wait(100)
   await fetchUpdates(persistence2)
   t.assert(arr2.length === PREFERRED_TRIM_SIZE + 1)
@@ -245,6 +246,8 @@ export const testClearDataMultipleDocs = async tc => {
 export const testClearDocumentMultipleDocs = async tc => {
   // this document will be cleared
   const doc1 = new Y.Doc()
+  const arr1 = doc1.getArray('t')
+  arr1.insert(0, [1])
   const persistence1 = new IndexeddbPersistence('doc1', doc1)
   persistence1.set('a', 4)
 
