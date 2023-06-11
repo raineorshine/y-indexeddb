@@ -1,6 +1,6 @@
 import * as Y from 'yjs'
-import * as idb from 'lib0/indexeddb.js'
-import { Observable } from 'lib0/observable.js'
+import * as idb from 'lib0/indexeddb'
+import { Observable } from 'lib0/observable'
 
 const dbname = 'y-indexeddb'
 const customStoreName = 'custom'
@@ -41,18 +41,18 @@ const keyRangeIndexUpperBound = (name, upper, upperOpen) => idb.createIDBKeyRang
 /**
  * @param {IndexeddbPersistence} idbPersistence
  * @param {function(IDBObjectStore):void} [beforeApplyUpdatesCallback]
+ * @param {function(IDBObjectStore):void} [afterApplyUpdatesCallback]
  */
-export const fetchUpdates = async (idbPersistence, beforeApplyUpdatesCallback) => {
+export const fetchUpdates = async (idbPersistence, beforeApplyUpdatesCallback = () => {}, afterApplyUpdatesCallback = () => {}) => {
   const [updatesStore] = idb.transact(/** @type {IDBDatabase} */ (dbcached), [updatesStoreName]) // , 'readonly')
   const updatesIndex = updatesStore.index('name,id')
   const updates = await idb.rtop(updatesIndex.getAll(keyRangeIndexLowerBound(idbPersistence.name, idbPersistence._dbref, false)))
   if (!idbPersistence._destroyed) {
-    if (beforeApplyUpdatesCallback) {
-      beforeApplyUpdatesCallback(updatesStore)
-    }
+    beforeApplyUpdatesCallback(updatesStore)
     Y.transact(idbPersistence.doc, () => {
       updates.forEach((/** @type {{ update: Uint8Array }} */record) => Y.applyUpdate(idbPersistence.doc, record.update))
     }, idbPersistence, false)
+    afterApplyUpdatesCallback(updatesStore)
   }
   const [, lastKey] = await idb.getLastKey(/** @type {any} */(updatesIndex), keyRangeIndexAll(idbPersistence.name))
   idbPersistence._dbref = lastKey + 1
@@ -192,12 +192,13 @@ export class IndexeddbPersistence extends Observable {
           name: this.name,
           update: Y.encodeStateAsUpdate(doc)
         }))
-      return fetchUpdates(this, beforeApplyUpdatesCallback).then(() => {
+
+      const afterApplyUpdatesCallback = () => {
         if (this._destroyed) return this
-        this.emit('synced', [this])
         this.synced = true
-        return this
-      })
+        this.emit('synced', [this])
+      }
+      return fetchUpdates(this, beforeApplyUpdatesCallback, afterApplyUpdatesCallback).then(() => this)
     })
 
     /**
