@@ -207,7 +207,9 @@ export const testClearDocumentSingleDoc = async tc => {
 export const testClearDataMultipleDocs = async tc => {
   // this document will be cleared
   const doc1 = new Y.Doc()
-  const persistence1 = new IndexeddbPersistence(tc.testName, doc1)
+  const arr1 = doc1.getArray('t')
+  arr1.insert(0, [1])
+  const persistence1 = new IndexeddbPersistence('doc1', doc1)
   persistence1.set('a', 4)
 
   // this document should be preserved
@@ -243,7 +245,7 @@ export const testClearDataMultipleDocs = async tc => {
 export const testClearDocumentMultipleDocs = async tc => {
   // this document will be cleared
   const doc1 = new Y.Doc()
-  const persistence1 = new IndexeddbPersistence(tc.testName, doc1)
+  const persistence1 = new IndexeddbPersistence('doc1', doc1)
   persistence1.set('a', 4)
 
   // this document should be preserved
@@ -254,7 +256,7 @@ export const testClearDocumentMultipleDocs = async tc => {
   persistence2.set('b', 5)
 
   // clear persistence1
-  await clearDocument(tc.testName)
+  await clearDocument('doc1')
 
   // persistence1 should have no updates
   const db = await idb.openDB('y-indexeddb', () => {})
