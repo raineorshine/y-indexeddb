@@ -53,11 +53,12 @@ export const fetchUpdates = async (idbPersistence, beforeApplyUpdatesCallback = 
       updates.forEach((/** @type {{ update: Uint8Array }} */record) => Y.applyUpdate(idbPersistence.doc, record.update))
     }, idbPersistence, false)
     afterApplyUpdatesCallback(updatesStore)
+
+    const [, lastKey] = await idb.getLastKey(/** @type {any} */(updatesIndex), keyRangeIndexAll(idbPersistence.name))
+    idbPersistence._dbref = lastKey + 1
+    const count = await idb.rtop(updatesIndex.count(keyRangeIndexAll(idbPersistence.name)))
+    idbPersistence._dbsize = count
   }
-  const [, lastKey] = await idb.getLastKey(/** @type {any} */(updatesIndex), keyRangeIndexAll(idbPersistence.name))
-  idbPersistence._dbref = lastKey + 1
-  const count = await idb.rtop(updatesIndex.count(keyRangeIndexAll(idbPersistence.name)))
-  idbPersistence._dbsize = count
   return updatesStore
 }
 
