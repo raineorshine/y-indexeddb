@@ -1,6 +1,6 @@
 {
   "name": "y-indexeddb",
-  "version": "9.0.11",
+  "version": "9.0.11-multiplex.0",
   "description": "IndexedDB database adapter for Yjs",
   "type": "module",
   "main": "./dist/y-indexeddb.cjs",
@@ -14,7 +14,7 @@
   "scripts": {
     "clean": "rm -rf dist",
     "test": "npm run lint",
-    "dist": "rollup -c",
+    "dist": "rollup -c && tsc",
     "lint": "markdownlint README.md && standard && tsc",
     "preversion": "npm run clean && npm run lint && npm run dist",
     "debug": "concurrently 'rollup -wc' 'http-server -o .'"
