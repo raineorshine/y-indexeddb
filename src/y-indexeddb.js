@@ -54,8 +54,11 @@ export const fetchUpdates = async (idbPersistence, beforeApplyUpdatesCallback = 
     }, idbPersistence, false)
     afterApplyUpdatesCallback(updatesStore)
 
-    const [, lastKey] = await idb.getLastKey(/** @type {any} */(updatesIndex), keyRangeIndexAll(idbPersistence.name))
-    idbPersistence._dbref = lastKey + 1
+    /** @type {[string, number] | undefined} */
+    const nameKeyPair = await idb.getLastKey(/** @type {any} */(updatesIndex), keyRangeIndexAll(idbPersistence.name))
+    if (!nameKeyPair) return updatesStore
+    idbPersistence._dbref = nameKeyPair[1] + 1
+
     const count = await idb.rtop(updatesIndex.count(keyRangeIndexAll(idbPersistence.name)))
     idbPersistence._dbsize = count
   }
@@ -188,11 +191,14 @@ export class IndexeddbPersistence extends Observable {
       /**
        * @param {IDBObjectStore} updatesStore
        */
-      const beforeApplyUpdatesCallback = (updatesStore) =>
-        idb.rtop(updatesStore.add({
-          name: this.name,
-          update: Y.encodeStateAsUpdate(doc)
-        }))
+      const beforeApplyUpdatesCallback = (updatesStore) => {
+        const update = Y.encodeStateAsUpdate(doc)
+
+        // do not save empty update
+        return update.length > 2
+          ? idb.rtop(updatesStore.add({ name: this.name, update }))
+          : null
+      }
 
       const afterApplyUpdatesCallback = () => {
         if (this._destroyed) return this
