@@ -204,7 +204,11 @@ export class IndexeddbPersistence extends Observable {
         if (this._destroyed) return this
         this.synced = true
         this.emit('synced', [this])
+
+        // compact database after initial sync to avoid continuous growth
+        this.storeStateDebounced(true)
       }
+
       return fetchUpdates(this, beforeApplyUpdatesCallback, afterApplyUpdatesCallback).then(() => this)
     })
 
@@ -212,10 +216,27 @@ export class IndexeddbPersistence extends Observable {
      * Timeout in ms until data is merged and persisted in idb.
      */
     this._storeTimeout = 1000
+
     /**
      * @type {any}
      */
     this._storeTimeoutId = null
+
+    /**
+     * @param {boolean} forceStore
+     */
+    this.storeStateDebounced = (forceStore = true) => {
+      if (forceStore || this._dbsize >= PREFERRED_TRIM_SIZE) {
+        if (this._storeTimeoutId !== null) {
+          clearTimeout(this._storeTimeoutId)
+        }
+        this._storeTimeoutId = setTimeout(() => {
+          storeState(this, forceStore)
+          this._storeTimeoutId = null
+        }, this._storeTimeout)
+      }
+    }
+
     /**
      * @param {Uint8Array} update
      * @param {any} origin
@@ -224,16 +245,8 @@ export class IndexeddbPersistence extends Observable {
       if (origin !== this && this.created) {
         const [updatesStore] = idb.transact(/** @type {IDBDatabase} */ (dbcached), [updatesStoreName])
         idb.rtop(updatesStore.add({ name: this.name, update }))
-        if (++this._dbsize >= PREFERRED_TRIM_SIZE) {
-          // debounce store call
-          if (this._storeTimeoutId !== null) {
-            clearTimeout(this._storeTimeoutId)
-          }
-          this._storeTimeoutId = setTimeout(() => {
-            storeState(this, false)
-            this._storeTimeoutId = null
-          }, this._storeTimeout)
-        }
+        this._dbsize++
+        this.storeStateDebounced(false)
       }
     }
     doc.on('update', this._storeUpdate)
